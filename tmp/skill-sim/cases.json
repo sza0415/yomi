@@ -1,0 +1,159 @@
+{
+  "cases": [
+    {
+      "case_id": "kbcli-script-sage-correct",
+      "name": "剧本专家问答 - 正确路径（sage 分支）",
+      "input": {
+        "user_message": "@剧本专家，proj_id:OPIID-320c744c41ed,scriptAnalysisId:SVID-04490235b951-tv3g,scriptVersionId:SVID-04490235b951，为这个剧本写一篇约1000字的故事摘要。要求如下：1、段落连贯，不分点；2、首句点出故事背景与核心冲突；3、故事结构按起承转合梳理但不出现'起''承转''合'字样；4、人物塑造血肉丰满。"
+      },
+      "expected": {
+        "path_id": "path_kbcli",
+        "expected_skills": [
+          { "name": "kbcli", "required": true }
+        ],
+        "nodes": [
+          "match_intent",
+          "read_references",
+          "decision_main",
+          "node_sage",
+          "output_sage",
+          "path_kbcli"
+        ],
+        "node_specs": [
+          { "id": "match_intent",   "kind": "input",      "required": true, "tool": "" },
+          { "id": "read_references","kind": "validation", "required": true, "tool": "read_file" },
+          { "id": "decision_main",  "kind": "decision",   "required": true, "tool": "" },
+          { "id": "node_sage",      "kind": "tool",       "required": true, "tool": "kbcli sage" },
+          { "id": "output_sage",    "kind": "output",     "required": true, "tool": "" }
+        ],
+        "execution_chain": [
+          { "id": "node_sage", "kind": "tool", "tool": "kbcli sage", "required": true }
+        ],
+        "notices": [
+          "禁止跳过references凭记忆拼接命令",
+          "不得输出proj_id/scriptAnalysisId/scriptVersionId字段名或值"
+        ],
+        "output_spec": {
+          "type": "专家回答",
+          "contains": ["剧本", "故事"],
+          "not_contain": ["proj_id:", "scriptAnalysisId:", "scriptVersionId:"]
+        },
+        "forbidden_nodes": [
+          "node_recall",
+          "node_sql_mode",
+          "node_dsl_mode",
+          "node_mcp_fallback"
+        ]
+      }
+    },
+    {
+      "case_id": "kbcli-script-sage-wrong-branch",
+      "name": "剧本专家问答 - 走错分叉（误判为查数）",
+      "input": {
+        "user_message": "查一下这个剧本的某些字段数据"
+      },
+      "expected": {
+        "path_id": "path_kbcli",
+        "expected_skills": [
+          { "name": "kbcli", "required": true }
+        ],
+        "nodes": [
+          "match_intent",
+          "read_references",
+          "decision_main",
+          "node_sage",
+          "output_sage",
+          "path_kbcli"
+        ],
+        "node_specs": [
+          { "id": "match_intent",   "kind": "input",      "required": true, "tool": "" },
+          { "id": "read_references","kind": "validation", "required": true, "tool": "" },
+          { "id": "decision_main",  "kind": "decision",   "required": true, "tool": "" },
+          { "id": "node_sage",      "kind": "tool",       "required": true, "tool": "kbcli sage" },
+          { "id": "output_sage",    "kind": "output",     "required": true, "tool": "" }
+        ],
+        "execution_chain": [
+          { "id": "node_sage", "kind": "tool", "tool": "kbcli sage", "required": true }
+        ],
+        "notices": [
+          "查数与专家两条线互斥"
+        ],
+        "output_spec": {
+          "type": "专家回答",
+          "contains": ["剧本"]
+        }
+      }
+    },
+    {
+      "case_id": "kbcli-dsl-simple-query",
+      "name": "查数 → DSL 模式 → 简单查询分支",
+      "input": {
+        "user_message": "kbcli kb-recall --text 项目ID，然后用 DSL 模式查《逐玉》项目ID"
+      },
+      "expected": {
+        "path_id": "path_kbcli",
+        "expected_skills": [
+          { "name": "kbcli", "required": true }
+        ],
+        "nodes": [
+          "match_intent",
+          "read_references",
+          "decision_main",
+          "node_recall",
+          "decision_search_mode",
+          "node_dsl_mode",
+          "check_capability",
+          "output_dsl",
+          "path_kbcli"
+        ],
+        "node_specs": [
+          { "id": "node_recall", "kind": "tool", "tool": "kbcli kb-recall", "required": true },
+          { "id": "node_dsl_mode", "kind": "tool", "tool": "kbcli kb-search", "required": false }
+        ],
+        "execution_chain": [
+          { "id": "node_recall", "kind": "tool", "tool": "kbcli kb-recall", "required": true },
+          { "id": "node_dsl_mode", "kind": "tool", "tool": "kbcli kb-search", "required": true }
+        ],
+        "output_spec": {
+          "type": "ID元数据",
+          "contains": ["项目ID"]
+        }
+      }
+    },
+    {
+      "case_id": "kbcli-sql-mode",
+      "name": "查数 → SQL 模式（电视剧播放指标）",
+      "input": {
+        "user_message": "查《逐玉》的播放量"
+      },
+      "expected": {
+        "path_id": "path_kbcli",
+        "expected_skills": [
+          { "name": "kbcli", "required": true }
+        ],
+        "nodes": [
+          "match_intent",
+          "read_references",
+          "decision_main",
+          "node_recall",
+          "decision_search_mode",
+          "node_sql_mode",
+          "output_sql",
+          "path_kbcli"
+        ],
+        "node_specs": [
+          { "id": "node_recall", "kind": "tool", "tool": "kbcli kb-recall", "required": true },
+          { "id": "node_sql_mode", "kind": "tool", "tool": "kbcli kb-search", "required": false }
+        ],
+        "execution_chain": [
+          { "id": "node_recall", "kind": "tool", "tool": "kbcli kb-recall", "required": true },
+          { "id": "node_sql_mode", "kind": "tool", "tool": "kbcli kb-search", "required": true }
+        ],
+        "output_spec": {
+          "type": "指标数据",
+          "contains": ["播放量", "收视率"]
+        }
+      }
+    }
+  ]
+}

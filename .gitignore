@@ -1,0 +1,17 @@
+# Go build artifacts
+/szabot
+/bin/
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# 本地配置 / session 数据（后续会用到）
+.szabot/
+/sessionlogs/
+*.local.json

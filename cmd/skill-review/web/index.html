@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Skill Review</title>
+  <style>
+    :root {
+      --ink: #1f2933;
+      --muted: #6b7680;
+      --faint: #9aa5ad;
+      --line: #e2e6ea;
+      --line-soft: #eef1f3;
+      --bg: #fafafa;
+      --white: #ffffff;
+      --accent: #2f6f9f;
+      --accent-soft: #eef4f9;
+      --ok: #2f7d54;
+      --bad: #b0413c;
+      --warn: #9a6a12;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; background: var(--bg); color: var(--ink);
+      font: 13.5px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    button, input, textarea, select { font: inherit; color: inherit; }
+    a { color: var(--accent); }
+    code, .mono { font-family: var(--mono); }
+
+    .layout { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: 100vh; }
+
+    /* ---------- 左侧栏目导航 ---------- */
+    .sidebar { background: var(--white); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+    .brand { padding: 16px 18px; border-bottom: 1px solid var(--line); }
+    .brand .title { font-weight: 600; font-size: 14px; }
+    .brand .sub { color: var(--faint); font-size: 11.5px; margin-top: 2px; }
+    .nav { padding: 8px; }
+    .nav-item {
+      width: 100%; text-align: left; background: transparent; border: 1px solid transparent;
+      border-radius: 4px; padding: 9px 10px; margin-bottom: 2px; cursor: pointer; color: var(--ink);
+      display: flex; align-items: baseline; gap: 8px;
+    }
+    .nav-item:hover { background: var(--line-soft); }
+    .nav-item.active { background: var(--accent-soft); border-color: #cfe0ec; }
+    .nav-item .idx { font: 11px var(--mono); color: var(--faint); width: 16px; }
+    .nav-item.active .idx { color: var(--accent); }
+    .nav-item .lbl { font-weight: 500; }
+    .nav-item.planned { color: var(--faint); }
+    .nav-item .tag { margin-left: auto; font-size: 10px; color: var(--faint); border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; }
+
+    .ctx { margin-top: auto; padding: 14px 18px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+    .ctx .row { display: flex; justify-content: space-between; padding: 3px 0; }
+    .ctx .row b { color: var(--ink); font-weight: 500; }
+
+    /* ---------- 右侧工作区 ---------- */
+    .work { padding: 22px 26px 40px; min-width: 0; }
+    .work-head { margin-bottom: 18px; }
+    .work-head h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    .work-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    .view { display: none; }
+    .view.active { display: block; }
+
+    .card { background: var(--white); border: 1px solid var(--line); border-radius: 6px; }
+    .card + .card { margin-top: 16px; }
+    .card-head { padding: 12px 16px; border-bottom: 1px solid var(--line-soft); display: flex; align-items: center; gap: 10px; }
+    .card-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+    .card-head .hint { color: var(--faint); font-size: 12px; }
+    .card-head .spacer { margin-left: auto; }
+    .card-body { padding: 16px; }
+
+    .split { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start; }
+    @media (max-width: 1000px) { .split { grid-template-columns: 1fr; } }
+
+    .list { border: 1px solid var(--line); border-radius: 6px; background: var(--white); overflow-y: auto; max-height: calc(100vh - 190px); }
+    .list-item { width: 100%; text-align: left; background: transparent; border: 0; border-bottom: 1px solid var(--line-soft); padding: 11px 13px; cursor: pointer; display: block; }
+    .list-item:last-child { border-bottom: 0; }
+    .list-item:hover { background: var(--line-soft); }
+    .list-item.active { background: var(--accent-soft); }
+    .list-item .name { font-weight: 500; }
+    .list-item .desc { color: var(--muted); font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
+    .list-item .meta { margin-top: 5px; font: 11px var(--mono); color: var(--faint); }
+
+    .btn { border: 1px solid var(--line); background: var(--white); border-radius: 4px; padding: 6px 12px; cursor: pointer; }
+    .btn:hover { border-color: #c5ccd2; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn.primary:hover { background: #285f89; }
+    .btn.small { padding: 4px 9px; font-size: 12px; }
+
+    textarea, input[type=text] { width: 100%; border: 1px solid var(--line); border-radius: 4px; padding: 9px 10px; background: #fff; }
+    textarea { resize: vertical; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; }
+    label.field { display: block; margin-bottom: 12px; }
+    label.field > span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+
+    .kbd { font: 11px var(--mono); background: var(--line-soft); border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; }
+    .empty { color: var(--faint); padding: 18px 4px; text-align: center; }
+
+    /* metrics */
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    @media (max-width: 760px) { .metrics { grid-template-columns: repeat(2, 1fr); } }
+    .metric { border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; background: #fff; }
+    .metric .k { color: var(--muted); font-size: 12px; }
+    .metric .v { font-size: 20px; font-weight: 600; margin-top: 3px; }
+
+    /* path compare */
+    .track { margin-bottom: 14px; }
+    .track .track-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .track .row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+    .pnode { flex: 0 0 auto; min-width: 116px; border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; background: #fff; position: relative; }
+    .pnode + .pnode { margin-left: 12px; }
+    .pnode + .pnode::before { content: "→"; position: absolute; left: -13px; top: 50%; transform: translateY(-50%); color: var(--faint); }
+    .pnode .kind { font: 10px var(--mono); color: var(--faint); text-transform: uppercase; }
+    .pnode .id { font-weight: 500; margin-top: 2px; overflow-wrap: anywhere; }
+    .pnode .tool { margin-top: 4px; font: 10.5px var(--mono); color: var(--accent); }
+    .pnode.ok { border-color: #c4dfce; }
+    .pnode.bad { border-color: #e3bcba; background: #fdf5f4; }
+    .pnode.miss { border-style: dashed; color: var(--bad); border-color: #e3bcba; }
+
+    /* 分叉树：n8n 风格横向画布（从左到右，分支在右侧展开成多行） */
+    .tree { overflow-x: auto; padding: 6px 4px 14px; }
+    .hseq { display: inline-flex; align-items: center; gap: 0; }
+    .hconn { flex: 0 0 26px; height: 2px; background: var(--line); position: relative; }
+    .hconn::after { content: "›"; position: absolute; right: -2px; top: 50%; transform: translateY(-50%); color: var(--faint); font-size: 15px; line-height: 0; }
+    .hnode { flex: 0 0 auto; width: 176px; border: 1px solid var(--line); border-radius: 7px; padding: 9px 11px; background: #fff; box-shadow: 0 1px 2px rgba(31,41,51,.04); }
+    .hnode .kind { font: 10px var(--mono); color: var(--faint); text-transform: uppercase; }
+    .hnode .id { font-weight: 600; margin-top: 2px; overflow-wrap: anywhere; }
+    .hnode .tool { margin-top: 4px; font: 10.5px var(--mono); color: var(--accent); overflow-wrap: anywhere; }
+    .hnode .cond { font-size: 11px; color: var(--muted); margin-top: 5px; line-height: 1.4; }
+    .hnode.input { border-top: 3px solid var(--faint); }
+    .hnode.decision { border-top: 3px solid var(--accent); }
+    .hnode.tool { border-top: 3px solid var(--teal, #138f9e); }
+    .hnode.validation { border-top: 3px solid var(--warn); }
+    .hnode.output { border-top: 3px solid var(--ok); }
+    .hnode.fallback { border-top: 3px solid var(--bad); }
+    .hnode-notes { margin: 5px 0 0; padding-left: 14px; font-size: 10.5px; color: var(--warn); }
+    /* 分支：decision 节点右侧竖直堆叠多行，每行前有条件标签 + 连线 */
+    .hbranches { display: inline-flex; flex-direction: column; gap: 16px; }
+    .hbranch { display: flex; align-items: center; }
+    .hbranch-head { flex: 0 0 132px; padding: 0 10px 0 12px; }
+    .hbranch-head .chip { display: inline-block; font: 10px var(--mono); background: var(--accent-soft); color: var(--accent); border-radius: 3px; padding: 2px 7px; margin-bottom: 3px; }
+    .hbranch-head .when { font-size: 11px; color: var(--ink); line-height: 1.35; }
+    .hbranch-expect { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+    .hbranch-expect code { color: var(--ok); }
+
+    table.cases { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.cases th, table.cases td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line-soft); }
+    table.cases th { color: var(--muted); font-weight: 500; font-size: 12px; }
+    .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; }
+    .pill.ok { background: #e8f3ec; color: var(--ok); }
+    .pill.bad { background: #f8e9e8; color: var(--bad); }
+
+    .fail { border-left: 3px solid var(--warn); background: #fdf8ef; padding: 8px 11px; border-radius: 0 4px 4px 0; margin-bottom: 7px; font-size: 12.5px; }
+    .fail code { color: var(--warn); }
+
+    .steps { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
+    .steps li { padding: 6px 0; border-bottom: 1px solid var(--line-soft); display: flex; gap: 8px; }
+    .steps li:last-child { border-bottom: 0; }
+    .steps .badge { font: 10px var(--mono); color: var(--faint); flex: 0 0 64px; text-transform: uppercase; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <!-- 左侧栏目导航 -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="title">Skill Review</div>
+        <div class="sub">Skill 评审工作台</div>
+      </div>
+      <nav class="nav" id="nav"></nav>
+      <div class="ctx">
+        <div class="row"><span>当前 Skill</span><b id="ctx-skill">—</b></div>
+        <div class="row"><span>评审版本</span><b id="ctx-version">—</b></div>
+      </div>
+    </aside>
+
+    <!-- 右侧工作区 -->
+    <main class="work">
+      <!-- 视图 1：Skill 管理 -->
+      <section class="view" data-view="skills">
+        <div class="work-head">
+          <h1>Skill 管理</h1>
+          <p>管理每一个 Skill：上传、编写 SKILL.md，并从正文生成预设 Path。模型据各 Skill 的 description 自主匹配意图，Skill 之间扁平平级。</p>
+        </div>
+        <div class="split">
+          <div>
+            <div class="card">
+              <div class="card-head"><h2>Skill 列表</h2><span class="hint" id="skill-count"></span><span class="spacer"></span><button class="btn small" id="skill-new">新建</button></div>
+              <div class="list" id="skill-list"><div class="empty">加载中…</div></div>
+            </div>
+          </div>
+          <div>
+            <div class="card">
+              <div class="card-head">
+                <h2 id="skill-title">选择一个 Skill</h2>
+                <span class="hint" id="skill-sub"></span>
+                <span class="spacer"></span>
+                <button class="btn small" id="skill-gen">生成预设 Path</button>
+                <button class="btn small primary" id="skill-save">保存</button>
+              </div>
+              <div class="card-body">
+                <label class="field"><span>SKILL.md（frontmatter + 正文）</span>
+                  <textarea id="skill-editor" rows="16" placeholder="选择左侧 Skill 后在此编辑…"></textarea>
+                </label>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>预设 Path</h2><span class="hint">从 SKILL.md 推导：意图匹配 → 分叉 → 各分支不同预期</span><span class="spacer"></span><button class="btn small" id="path-export-cases">导出用例</button></div>
+              <div class="card-body" id="skill-path"><div class="empty">尚未生成 Path</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 视图 2：测试用例构建 -->
+      <section class="view" data-view="cases">
+        <div class="work-head">
+          <h1>测试用例构建</h1>
+          <p>构建用例 = 收集一次真实运行。把 SSE 事件流粘进来，解析并抽取成 Case（预期）与 Run（实际）。</p>
+        </div>
+        <div class="split">
+          <div>
+            <div class="card">
+              <div class="card-head"><h2>SSE 事件流</h2></div>
+              <div class="card-body">
+                <label class="field"><span>用户输入</span>
+                  <input type="text" id="ext-input" placeholder="例如：@expert:market 帮我拆解这个综艺的营销方案">
+                </label>
+                <label class="field"><span>粘贴事件流（每行一条 <code>data: {…}</code>，或直接贴 JSON 数组）</span>
+                  <textarea id="ext-raw" rows="12" placeholder='data: {"kind":"reasoning","text":"识别到 @expert:market …"}
+data: {"kind":"tool_call","text":"content-sim","tool":"content-sim"}
+data: {"kind":"tool_result","text":"{...}"}
+data: {"kind":"answer","text":"营销方案：…","done":true}'></textarea>
+                </label>
+                <button class="btn primary" id="ext-run">解析并抽取</button>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="card">
+              <div class="card-head"><h2>抽取结果</h2><span class="hint">按事件类型映射为节点</span></div>
+              <div class="card-body" id="ext-out"><div class="empty">粘贴事件流后点击「解析并抽取」</div></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>另存为</h2><span class="spacer"></span>
+                <button class="btn small" id="ext-save-run">保存为 Run</button>
+                <button class="btn small" id="ext-save-case">固化为 Case 基线</button>
+              </div>
+              <div class="card-body" id="ext-json"><div class="empty">抽取后可导出 JSON</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 视图 3：评估对比 -->
+      <section class="view" data-view="eval">
+        <div class="work-head">
+          <h1>评估与对比</h1>
+          <p>用测试用例评估 Skill：核心是预期路径与实际路径的逐节点对比。</p>
+        </div>
+        <div class="metrics" id="eval-metrics"></div>
+        <div class="card">
+          <div class="card-head"><h2>用例</h2><span class="hint">选择一条查看路径对比</span></div>
+          <div class="card-body">
+            <table class="cases"><thead><tr><th>Case</th><th>名称</th><th>状态</th><th>首个失败</th></tr></thead>
+            <tbody id="eval-cases"></tbody></table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2 id="cmp-title">路径对比</h2><span class="hint" id="cmp-sub"></span></div>
+          <div class="card-body" id="cmp-body"><div class="empty">选择上方一条用例</div></div>
+        </div>
+      </section>
+
+      <!-- 视图 4：回归（规划） -->
+      <section class="view" data-view="regression">
+        <div class="work-head">
+          <h1>回归对比</h1>
+          <p>规划中：同一 Case 在不同 Skill 版本各跑一次，标出新修复 / 新回归 / 保持。</p>
+        </div>
+        <div class="card"><div class="card-body"><div class="empty">该模块在后续阶段实现（对应计划 M4）。</div></div></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const S = { data: null, skills: [], skill: null, extracted: null, selectedCase: null, view: "skills" };
+    const $ = (id) => document.getElementById(id);
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const pct = (v) => Number(v) < 0 || v == null ? "—" : `${(Number(v) * 100).toFixed(1)}%`;
+    const kindZh = (k) => ({ input: "输入", validation: "校验", decision: "判断", tool: "工具", output: "输出", fallback: "兜底", note: "注意" }[k] || k || "节点");
+
+    // ---------- 栏目导航 ----------
+    const VIEWS = [
+      { id: "skills", idx: "01", label: "Skill 管理" },
+      { id: "cases", idx: "02", label: "测试用例" },
+      { id: "eval", idx: "03", label: "评估对比" },
+      { id: "regression", idx: "04", label: "回归", planned: true },
+    ];
+    function renderNav() {
+      $("nav").innerHTML = VIEWS.map((v) => `
+        <button class="nav-item ${v.id === S.view ? "active" : ""} ${v.planned ? "planned" : ""}" data-nav="${v.id}">
+          <span class="idx">${v.idx}</span><span class="lbl">${esc(v.label)}</span>${v.planned ? '<span class="tag">规划</span>' : ""}
+        </button>`).join("");
+      document.querySelectorAll("[data-nav]").forEach((b) => b.onclick = () => switchView(b.dataset.nav));
+    }
+    function switchView(id) {
+      S.view = id;
+      document.querySelectorAll(".view").forEach((el) => el.classList.toggle("active", el.dataset.view === id));
+      renderNav();
+    }
+
+    // ---------- 模块一：Skill 管理 ----------
+    async function loadSkills() {
+      let ok = false;
+      try {
+        const r = await fetch("/api/skills");
+        if (r.ok) { S.skills = await r.json(); ok = true; }
+      } catch (_) { /* 无后端 */ }
+      // 仅在"连不上后端"时用占位；后端返回空数组则如实显示"没有发现 Skill"，不塞假数据。
+      if (!ok && (!S.skills || !S.skills.length)) {
+        S.skills = [{ name: "content-expert", description: "（示例占位：未连接后端）", rel_path: "skills/content-expert/SKILL.md" }];
+      }
+      if (!S.skills) S.skills = [];
+      renderSkillList();
+    }
+    function renderSkillList() {
+      $("skill-count").textContent = S.skills.length ? `${S.skills.length} 个` : "";
+      $("skill-list").innerHTML = S.skills.map((s) => `
+        <button class="list-item ${S.skill && S.skill.name === s.name ? "active" : ""}" data-skill="${esc(s.name)}">
+          <div class="name">${esc(s.name)}</div>
+          <div class="desc">${esc(s.description || "")}</div>
+          <div class="meta">${esc(s.rel_path || "")}</div>
+        </button>`).join("") || `<div class="empty">没有发现 Skill</div>`;
+      document.querySelectorAll("[data-skill]").forEach((b) => b.onclick = () => selectSkill(b.dataset.skill));
+    }
+    async function selectSkill(name) {
+      S.skill = S.skills.find((s) => s.name === name) || { name };
+      $("skill-title").textContent = name;
+      $("skill-sub").textContent = S.skill.rel_path || "";
+      $("ctx-skill").textContent = name;
+      let body = S.skill.body || "";
+      try {
+        const r = await fetch("/api/skill?name=" + encodeURIComponent(name));
+        if (r.ok) { body = (await r.json()).content || body; }
+      } catch (_) {}
+      $("skill-editor").value = body || placeholderSkillMd(name);
+      renderSkillList();
+      // 优先加载已存储的 Path 缓存（skills/<name>/PATH.json），有就直接渲染，
+      // 不必每次重新生成（尤其 LLM 生成有成本）。
+      $("skill-path").innerHTML = `<div class="empty">加载 Path…</div>`;
+      $("skill-gen").textContent = "生成预设 Path";
+      try {
+        const r = await fetch("/api/skill/paths?name=" + encodeURIComponent(name));
+        if (r.ok) {
+          const data = await r.json();
+          if (data && data.cached && data.path) {
+            renderPathFlow($("skill-path"), data.path.nodes || [], data.path);
+            $("skill-gen").textContent = "重新生成";
+            return;
+          }
+        }
+      } catch (_) {}
+      $("skill-path").innerHTML = `<div class="empty">尚无 Path，点击「生成预设 Path」从 SKILL.md 推导</div>`;
+    }
+    function placeholderSkillMd(name) {
+      return `---\nname: ${name}\ndescription: "在此描述做什么、何时触发（触发关键词是唯一信号）"\nmetadata: {"requires":{"bins":[]}}\n---\n\n# ${name}\n\n## 命令速查\n\n## 重要规则\n\n## 异常处理\n`;
+    }
+    async function saveSkill() {
+      if (!S.skill) { alert("请先选择一个 Skill"); return; }
+      const content = $("skill-editor").value;
+      try {
+        const r = await fetch("/api/skill?name=" + encodeURIComponent(S.skill.name), { method: "PUT", body: content });
+        alert(r.ok ? "已保存" : "保存失败（无后端时仅内存态）");
+      } catch (_) { S.skill.body = content; alert("已暂存到内存（未连接后端）"); }
+    }
+    // Path 生成：优先后端（LLM/规则版，结果落盘缓存），无后端时前端规则版兜底。
+    // 正式生成不传 content —— 基于磁盘已保存的 SKILL.md，这样后端才会写入 PATH.json 缓存。
+    async function genPath() {
+      if (!S.skill) { alert("请先选择一个 Skill"); return; }
+      const md = $("skill-editor").value;
+      $("skill-path").innerHTML = `<div class="empty">生成中…</div>`;
+      let path = null;
+      try {
+        const r = await fetch("/api/skill/paths", { method: "POST", body: JSON.stringify({ name: S.skill.name }) });
+        if (r.ok) { path = await r.json(); $("skill-gen").textContent = "重新生成"; }
+      } catch (_) {}
+      if (!path) { path = derivePathFromMd(S.skill.name, md); }
+      renderPathFlow($("skill-path"), path.nodes || [], path);
+    }
+    function derivePathFromMd(name, md) {
+      const nodes = [];
+      // 1) 意图匹配：模型据 description 命中该 Skill
+      const trig = (md.match(/@[a-z]+:[a-z\-]+/gi) || []).slice(0, 3).join(" / ");
+      nodes.push({ id: "match_intent", kind: "input", condition: `模型据 description 命中 ${name}${trig ? "（触发词 " + trig + "）" : ""}` });
+      // 2) 前置：必须先读 references
+      const ref = md.match(/references\/[\w.\-]+/);
+      if (/必须先读取|强制读取/.test(md) && ref) nodes.push({ id: "read_reference", kind: "validation", condition: "先读取 " + ref[0] });
+      // 3) 工具：命令速查里的可执行调用
+      const tools = [...md.matchAll(/bash\s+([\w./\-]+\/([\w\-]+))/g)];
+      tools.slice(0, 4).forEach((m) => nodes.push({ id: "run_" + m[2], kind: "tool", tool: m[2], condition: "执行 " + m[2] }));
+      // 4) 校验 / 注意事项
+      if (/重要规则|禁止|不得/.test(md)) nodes.push({ id: "verify_result", kind: "validation", condition: "按重要规则校验结果，禁止伪造" });
+      // 5) 异常
+      if (/异常处理|退出|重试/.test(md)) nodes.push({ id: "handle_error", kind: "fallback", condition: "工具失败时补参重试 / 友好提示" });
+      // 6) 输出
+      nodes.push({ id: "produce_output", kind: "output", condition: "产出结构化结果" });
+      return { path_id: "path_" + name.replace(/[^\w]/g, "_"), name: name + " 完整路径", entry_conditions: trig ? [trig] : [], nodes };
+    }
+
+    // ---------- 模块二：测试用例构建（SSE 抽取） ----------
+    function parseSSE(raw) {
+      raw = (raw || "").trim();
+      if (!raw) return [];
+      // 情况 A：直接是 JSON 数组
+      if (raw.startsWith("[")) { try { return JSON.parse(raw); } catch (_) {} }
+      // 情况 B：逐行 data: {…}
+      const events = [];
+      raw.split(/\r?\n/).forEach((line) => {
+        line = line.trim();
+        if (!line || line.startsWith(":") || line.startsWith("event:")) return;
+        const body = line.startsWith("data:") ? line.slice(5).trim() : line;
+        try { events.push(JSON.parse(body)); } catch (_) {}
+      });
+      return events;
+    }
+    function extract() {
+      const events = parseSSE($("ext-raw").value);
+      if (!events.length) { $("ext-out").innerHTML = `<div class="empty">未解析到有效事件</div>`; return; }
+      const nodes = [], toolCalls = [], chain = [];
+      let output = "";
+      events.forEach((e, i) => {
+        const kind = e.kind || (e.done ? "answer" : "answer");
+        if (kind === "reasoning") nodes.push({ node_id: "decide_" + i, kind: "decision", note: e.text });
+        else if (kind === "tool_call") { const t = e.tool || e.text; nodes.push({ node_id: "run_" + (t || i), kind: "tool", tool: t }); if (t) toolCalls.push(t); chain.push({ id: "call_" + (t || i), kind: "tool", tool: t }); }
+        else if (kind === "tool_result") nodes.push({ node_id: "result_" + i, kind: "tool", note: "工具返回" });
+        else if (kind === "answer") { if (!e.delta) output += (e.text || ""); }
+      });
+      if (!nodes.some((n) => n.kind === "output")) nodes.push({ node_id: "produce_output", kind: "output" });
+      const input = $("ext-input").value;
+      const run = {
+        case_id: "case-draft", selected_skills: guessSkills(input, events),
+        actual_path: nodes.map((n) => n.node_id), trace: nodes,
+        execution_chain: chain, tool_calls: toolCalls,
+        output_type: "analysis_report", output_text: output.slice(0, 4000),
+      };
+      const expected = {
+        path_id: "path_draft",
+        expected_skills: run.selected_skills.map((s) => ({ name: s, required: true })),
+        execution_chain: chain.map((c) => ({ ...c, required: true })),
+        nodes: run.actual_path,
+        output_spec: { type: "analysis_report" },
+      };
+      S.extracted = { input, run, expected };
+      renderExtract();
+    }
+    function guessSkills(input, events) {
+      const set = new Set();
+      events.forEach((e) => { if (e.skill) set.add(e.skill); });
+      const m = (input || "").match(/@expert:([a-z\-]+)/i);
+      if (m) set.add("content-expert");
+      return [...set];
+    }
+    function renderExtract() {
+      const { run } = S.extracted;
+      $("ext-out").innerHTML = `
+        <div style="margin-bottom:10px"><b>命中 Skill</b>：${run.selected_skills.map((s) => `<code>${esc(s)}</code>`).join(" ") || "—"}</div>
+        <div style="margin-bottom:10px"><b>工具调用</b>：${run.tool_calls.map((t) => `<code>${esc(t)}</code>`).join(" ") || "—"}</div>
+        <ul class="steps">${run.trace.map((n) => `<li><span class="badge">${esc(kindZh(n.kind))}</span><span>${esc(n.node_id)}${n.tool ? " · " + esc(n.tool) : ""}${n.note ? " — " + esc(String(n.note).slice(0, 60)) : ""}</span></li>`).join("")}</ul>`;
+      $("ext-json").innerHTML = `<textarea rows="10" readonly>${esc(JSON.stringify(S.extracted, null, 2))}</textarea>`;
+    }
+    function download(name, obj) {
+      const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click(); URL.revokeObjectURL(a.href);
+    }
+
+    // ---------- 模块三：评估对比 ----------
+    function renderMetrics(report) {
+      const m = report.metrics || {};
+      const items = [
+        ["用例通过", `${m.passed_cases ?? 0}/${m.total_cases ?? 0}`],
+        ["Skill 命中率", pct(m.skill_selection_rate)],
+        ["Path 覆盖率", pct(m.path_coverage)],
+        ["节点通过率", pct(m.node_pass_rate)],
+        ["路径匹配率", pct(m.path_match_rate)],
+        ["链路通过率", pct(m.chain_pass_rate)],
+        ["注意事项通过率", pct(m.notice_pass_rate)],
+        ["输出通过率", pct(m.output_pass_rate)],
+      ];
+      $("eval-metrics").innerHTML = items.map(([k, v]) => `<div class="metric"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join("");
+    }
+    function renderEvalCases(report) {
+      const rows = report.results || [];
+      $("eval-cases").innerHTML = rows.length ? rows.map((r) => {
+        const f = (r.failures || [])[0];
+        return `<tr data-case="${esc(r.case_id)}" style="cursor:pointer">
+          <td class="mono">${esc(r.case_id)}</td>
+          <td>${esc(r.name || "—")}</td>
+          <td><span class="pill ${r.passed ? "ok" : "bad"}">${r.passed ? "通过" : "失败"}</span></td>
+          <td>${f ? `<code>${esc(f.code)}</code>` : "—"}</td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="4"><div class="empty">没有用例结果（用 -cases/-runs 启动，或从模块二导出后加载）</div></td></tr>`;
+      document.querySelectorAll("[data-case]").forEach((tr) => tr.onclick = () => showCompare(tr.dataset.case));
+    }
+    function findPath(pid) { return (S.data.paths || []).find((p) => p.path_id === pid); }
+    function showCompare(caseId) {
+      const result = (S.data.report.results || []).find((r) => r.case_id === caseId);
+      if (!result) return;
+      S.selectedCase = caseId;
+      const exp = result.expected || {};
+      const path = findPath(exp.path_id);
+      const expectedNodes = path ? path.nodes : (exp.nodes || []).map((id) => ({ id, kind: "" }));
+      const actual = (result.actual && (result.actual.actual_path || [])) || [];
+      const failNodes = new Set((result.failures || []).map((f) => f.failed_node).filter(Boolean));
+      $("cmp-title").textContent = `${caseId} 路径对比`;
+      $("cmp-sub").textContent = result.passed ? "通过" : "存在失败";
+
+      const expTrack = expectedNodes.map((n) => {
+        const id = n.id || n; const hit = actual.includes(id);
+        return `<div class="pnode ${hit ? "ok" : "miss"} ${n.kind || ""}"><div class="kind">${esc(kindZh(n.kind))}</div><div class="id">${esc(id)}</div>${n.tool ? `<div class="tool">${esc(n.tool)}</div>` : ""}</div>`;
+      }).join("");
+      const expectedIds = expectedNodes.map((n) => n.id || n);
+      const actTrack = actual.map((id) => {
+        const bad = !expectedIds.includes(id) || failNodes.has(id);
+        return `<div class="pnode ${bad ? "bad" : "ok"}"><div class="kind">实际</div><div class="id">${esc(id)}</div></div>`;
+      }).join("");
+
+      const failures = (result.failures || []).map((f) => `<div class="fail"><code>${esc(f.code)}</code> · ${esc(f.message)}${f.failed_node ? ` · 节点 <code>${esc(f.failed_node)}</code>` : ""}</div>`).join("");
+      $("cmp-body").innerHTML = `
+        <div class="track"><div class="track-label">预期路径</div><div class="row">${expTrack || '<span class="empty">无预期节点</span>'}</div></div>
+        <div class="track"><div class="track-label">实际路径</div><div class="row">${actTrack || '<span class="empty">无实际节点</span>'}</div></div>
+        ${failures ? `<div style="margin-top:6px">${failures}</div>` : `<div class="empty">该用例无失败项</div>`}`;
+    }
+
+    // ---------- 启动 ----------
+    async function boot() {
+      renderNav();
+      switchView("skills");
+      loadSkills();
+      // 评估数据（复用现有 /api/data）
+      try {
+        const r = await fetch("/api/data");
+        S.data = await r.json();
+      } catch (_) { S.data = { report: { metrics: {}, results: [] }, paths: [] }; }
+      $("ctx-version").textContent = (S.data.report && S.data.report.skill_version) || "未标记";
+      renderMetrics(S.data.report || {});
+      renderEvalCases(S.data.report || {});
+
+      // 事件绑定
+      $("skill-save").onclick = saveSkill;
+      $("skill-gen").onclick = genPath;
+      $("path-export-cases").onclick = exportBranchCases;
+      $("skill-new").onclick = () => { const n = prompt("新建 Skill 名称"); if (n) { S.skills.unshift({ name: n, description: "", rel_path: "skills/" + n + "/SKILL.md" }); renderSkillList(); selectSkill(n); switchView("skills"); } };
+      $("ext-run").onclick = extract;
+      $("ext-save-run").onclick = () => { if (S.extracted) download("run.json", S.extracted.run); };
+      $("ext-save-case").onclick = () => { if (S.extracted) download("case.json", { case_id: "case-" + Date.now(), name: S.extracted.input || "抽取用例", input: { user_message: S.extracted.input }, expected: S.extracted.expected }); };
+    }
+
+    function renderPathFlow(el, nodes, path) {
+      S.currentPath = path && path.nodes ? path : { nodes: nodes || [] };
+      if (!nodes || !nodes.length) { el.innerHTML = `<div class="empty">没有节点</div>`; return; }
+      const head = path && path.entry_conditions && path.entry_conditions.length ? `<div class="track-label">入口：${esc(path.entry_conditions.join(" / "))}</div>` : "";
+      // 有 branches/next 就按树渲染分叉；否则退回横向线性渲染（兼容旧 Path）。
+      const hasTree = nodes.some((n) => (n.branches && n.branches.length) || (n.next && n.next.length));
+      if (hasTree) {
+        el.innerHTML = `<div class="track">${head}<div class="tree">${renderTree(nodes)}</div></div>`;
+        return;
+      }
+      el.innerHTML = `<div class="track">${head}<div class="row">${nodes.map((n) => `<div class="pnode ${n.kind || ""}"><div class="kind">${esc(kindZh(n.kind))}</div><div class="id">${esc(n.id)}</div>${n.tool ? `<div class="tool">${esc(n.tool)}</div>` : ""}${n.condition ? `<div style="font-size:11px;color:var(--muted);margin-top:4px">${esc(n.condition)}</div>` : ""}</div>`).join("")}</div></div>`;
+    }
+
+    // renderTree 从 match_intent 出发按 next/branches 遍历，渲染成 n8n 风格的
+    // 横向画布：主流程从左到右串联；decision 节点在右侧把多个分支竖直堆叠，
+    // 每个分支前标注条件标签，再各自向右延伸子链。
+    function renderTree(nodes) {
+      const byId = {}; nodes.forEach((n) => byId[n.id] = n);
+      const start = byId["match_intent"] || nodes[0];
+      const seen = {};
+      const conn = `<div class="hconn"></div>`;
+      const nodeCard = (n) => {
+        const notes = (n.notes || []).length ? `<ul class="hnode-notes">${n.notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+        return `<div class="hnode ${esc(n.kind || "")}"><div class="kind">${esc(kindZh(n.kind))}</div><div class="id">${esc(n.id)}</div>${n.tool ? `<div class="tool">${esc(n.tool)}</div>` : ""}${n.condition ? `<div class="cond">${esc(n.condition)}</div>` : ""}${notes}</div>`;
+      };
+      // walk 返回一段横向序列（.hseq 的内容），从节点 id 向右延伸。
+      const walk = (id, depth) => {
+        const n = byId[id];
+        if (!n || depth > 40) return "";
+        if (seen[id]) return `${nodeCard({ id: "↺ " + id, kind: "" })}`;
+        seen[id] = true;
+        let html = nodeCard(n);
+        if (n.branches && n.branches.length) {
+          const rows = n.branches.map((b) => {
+            const exp = b.expect ? `<div class="hbranch-expect">预期：${b.expect.type ? `<code>${esc(b.expect.type)}</code> ` : ""}${(b.expect.contains || []).map((c) => `含「${esc(c)}」`).join("、")}${(b.expect.not_contains || []).length ? ` · 禁含「${(b.expect.not_contains).map(esc).join("、")}」` : ""}</div>` : "";
+            const head = `<div class="hbranch-head"><span class="chip">${esc(b.label || "分支")}</span><div class="when">${esc(b.when || "")}</div>${exp}</div>`;
+            const sub = b.to ? `<div class="hseq">${walk(b.to, depth + 1)}</div>` : "";
+            return `<div class="hbranch">${head}${sub}</div>`;
+          }).join("");
+          html += conn + `<div class="hbranches">${rows}</div>`;
+        } else if (n.next && n.next.length) {
+          // 线性后继（取第一个；多个非分支后继少见，退化为顺序展开）。
+          html += conn + walk(n.next[0], depth + 1);
+        }
+        return html;
+      };
+      let out = `<div class="hseq">${walk(start.id, 0)}</div>`;
+      const orphans = nodes.filter((n) => !seen[n.id]);
+      if (orphans.length) out += `<div class="hseq" style="margin-top:12px;opacity:.75">${orphans.map(nodeCard).join(conn)}</div>`;
+      return out;
+    }
+
+    // enumerateCasePaths 枚举分叉树里每条 根→叶(output) 的路径，
+    // 每条路径生成一条 Case：经过的 tool 节点 → execution_chain，
+    // 叶子分支的 expect → output_spec，条件文字 → notices。
+    function enumerateCasePaths(path) {
+      const nodes = (path && path.nodes) || [];
+      if (!nodes.length) return [];
+      const byId = {}; nodes.forEach((n) => byId[n.id] = n);
+      const start = byId["match_intent"] || nodes[0];
+      const results = [];
+      const dfs = (id, trail, whenChain, expect, depth) => {
+        const n = byId[id];
+        if (!n || depth > 40) return;
+        const t = trail.concat([n]);
+        const outs = [];
+        if (n.branches && n.branches.length) {
+          n.branches.forEach((b) => {
+            if (b.to) dfs(b.to, t, whenChain.concat([b.label || b.when || ""]), b.expect || expect, depth + 1);
+            else results.push(makeCase(t, whenChain.concat([b.label || b.when || ""]), b.expect || expect));
+          });
+          return;
+        }
+        if (n.next && n.next.length) { n.next.forEach((nx) => dfs(nx, t, whenChain, expect, depth + 1)); return; }
+        // 叶子（通常是 output 节点）
+        results.push(makeCase(t, whenChain, expect));
+      };
+      dfs(start.id, [], [], null, 0);
+      return results;
+    }
+    function makeCase(trailNodes, whenChain, expect) {
+      const branchLabel = whenChain.filter(Boolean).join(" / ") || "默认";
+      const tools = trailNodes.filter((n) => n.kind === "tool");
+      const chain = tools.map((n) => ({ id: n.id, kind: "tool", tool: n.tool, required: true }));
+      const notices = trailNodes.flatMap((n) => n.notes || []);
+      const skillName = (S.skill && S.skill.name) || "skill";
+      const out = {};
+      if (expect) { if (expect.type) out.type = expect.type; if (expect.contains) out.contains = expect.contains; if (expect.not_contains) out.not_contains = expect.not_contains; }
+      return {
+        case_id: `case-${skillName}-${branchLabel.replace(/[^\w]+/g, "_")}`.slice(0, 60),
+        name: `${skillName}：${branchLabel}`,
+        input: { user_message: "" },
+        expected: {
+          path_id: (S.currentPath && S.currentPath.path_id) || ("path_" + skillName),
+          expected_skills: [{ name: skillName, required: true }],
+          nodes: trailNodes.map((n) => n.id),
+          execution_chain: chain,
+          notices: notices,
+          output_spec: out,
+        },
+        tags: ["auto", branchLabel],
+      };
+    }
+    function exportBranchCases() {
+      if (!S.currentPath || !(S.currentPath.nodes || []).length) { alert("请先生成 Path"); return; }
+      const cases = enumerateCasePaths(S.currentPath);
+      if (!cases.length) { alert("未能从 Path 枚举出用例路径"); return; }
+      const name = (S.skill && S.skill.name) || "skill";
+      download(`cases-${name}.json`, { cases });
+    }
+
+    boot().catch((e) => { document.querySelector(".work").insertAdjacentHTML("afterbegin", `<div class="fail">加载失败：${esc(e.message)}</div>`); });
+  </script>
+</body>
+</html>

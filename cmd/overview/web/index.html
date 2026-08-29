@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>szabot · 项目地图</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6f9f'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='monospace'%3Esz%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --ink: #1f2933; --muted: #6b7680; --faint: #9aa5ad;
+    --line: #e2e6ea; --line-soft: #eef1f3; --bg: #fafafa; --white: #fff;
+    --accent: #2f6f9f; --accent-soft: #eef4f9;
+    --ok: #2f7d54; --ok-soft: #eaf4ee;
+    --bad: #b0413c; --warn: #9a6a12; --warn-soft: #faf3e4;
+    --violet: #6b5b95; --violet-soft: #f1eef7;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 13.5px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  a { color: var(--accent); }
+  code, .mono { font-family: var(--mono); }
+
+  .layout { display: grid; grid-template-columns: 216px minmax(0, 1fr); min-height: 100vh; }
+  .sidebar { background: var(--white); border-right: 1px solid var(--line); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; }
+  .brand { padding: 16px 18px; border-bottom: 1px solid var(--line); }
+  .brand .title { font-weight: 700; font-size: 15px; }
+  .brand .sub { color: var(--faint); font-size: 11.5px; margin-top: 2px; }
+  .nav { padding: 8px; overflow-y: auto; }
+  .nav-item { width: 100%; text-align: left; background: transparent; border: 1px solid transparent;
+    border-radius: 4px; padding: 9px 10px; margin-bottom: 2px; cursor: pointer; color: var(--ink);
+    display: flex; align-items: baseline; gap: 8px; font: inherit; }
+  .nav-item:hover { background: var(--line-soft); }
+  .nav-item.active { background: var(--accent-soft); border-color: #cfe0ec; }
+  .nav-item .ico { width: 18px; text-align: center; font-size: 12px; color: var(--faint); }
+  .nav-item.active .ico { color: var(--accent); }
+  .nav-item .lbl { font-weight: 500; }
+  .ctx { margin-top: auto; padding: 14px 18px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
+  .ctx .row { display: flex; justify-content: space-between; padding: 2px 0; }
+  .ctx .row b { color: var(--ink); font-weight: 500; }
+
+  .work { padding: 24px 30px 60px; min-width: 0; }
+  .work-head { margin-bottom: 20px; }
+  .work-head h1 { margin: 0; font-size: 19px; font-weight: 700; }
+  .work-head p { margin: 5px 0 0; color: var(--muted); font-size: 13px; max-width: 860px; }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  .card { background: var(--white); border: 1px solid var(--line); border-radius: 8px; }
+  .card + .card { margin-top: 16px; }
+  .card-head { padding: 13px 18px; border-bottom: 1px solid var(--line-soft); display: flex; align-items: center; gap: 10px; }
+  .card-head h2 { margin: 0; font-size: 14.5px; font-weight: 600; }
+  .card-head .hint { color: var(--faint); font-size: 12px; }
+  .card-body { padding: 18px; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 1080px) { .grid2, .grid4 { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 720px)  { .grid2, .grid4 { grid-template-columns: 1fr; } }
+
+  .metric { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; background: var(--white); }
+  .metric .k { color: var(--muted); font-size: 12px; }
+  .metric .v { font-size: 22px; font-weight: 700; margin-top: 2px; }
+  .metric .s { color: var(--faint); font-size: 11.5px; margin-top: 2px; }
+
+  .arch { display: flex; align-items: stretch; overflow-x: auto; padding: 6px 2px 10px; }
+  .arch-node { flex: 1 1 0; min-width: 140px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--white); padding: 12px 14px; position: relative; transition: all .15s; }
+  .arch-node:hover { border-color: var(--accent); box-shadow: 0 2px 10px rgba(47,111,159,.12); transform: translateY(-2px); }
+  .arch-node .role { font-weight: 600; font-size: 13.5px; padding-right: 40px; }
+  .arch-node .pkg { font: 10.5px var(--mono); color: var(--accent); margin-top: 2px; }
+  .arch-node .duty { color: var(--muted); font-size: 12px; margin-top: 7px; line-height: 1.5; }
+  .arch-node .dir { position: absolute; top: 10px; right: 10px; font-size: 10px; border-radius: 3px; padding: 1px 6px; }
+  .dir.out { background: var(--ok-soft); color: var(--ok); }
+  .dir.mid { background: var(--accent-soft); color: var(--accent); }
+  .dir.in  { background: var(--violet-soft); color: var(--violet); }
+  .arch-sep { flex: 0 0 34px; display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 15px; }
+  .arch-leg { text-align: center; color: var(--faint); font-size: 11px; margin-top: 10px; }
+  .rolemark { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+  .dot-out { background: var(--ok); } .dot-mid { background: var(--accent); } .dot-in { background: var(--violet); }
+
+  .journey { position: relative; padding-left: 32px; }
+  .journey::before { content: ""; position: absolute; left: 9px; top: 8px; bottom: 8px; width: 2px; background: var(--line); }
+  .jstep { position: relative; padding: 0 0 18px; }
+  .jstep:last-child { padding-bottom: 0; }
+  .jstep .dot { position: absolute; left: -32px; top: 2px; width: 20px; height: 20px; border-radius: 50%;
+    background: var(--accent); color: #fff; font: 11px/20px var(--mono); text-align: center; }
+  .jstep.loop .dot { background: var(--warn); }
+  .jstep .t { font-weight: 600; font-size: 13.5px; }
+  .jstep .d { color: var(--muted); font-size: 12.5px; margin-top: 3px; max-width: 760px; }
+  .jstep .refs { margin-top: 5px; }
+  .jstep .refs code { font-size: 11px; background: var(--line-soft); border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; color: var(--muted); }
+
+  .loopflow { display: flex; align-items: stretch; overflow-x: auto; padding: 4px 0 8px; }
+  .lnode { flex: 0 0 auto; min-width: 158px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--white); padding: 10px 12px; position: relative; }
+  .lnode + .lnode { margin-left: 30px; }
+  .lnode + .lnode::before { content: "→"; position: absolute; left: -24px; top: 50%; transform: translateY(-50%); color: var(--faint); font-size: 14px; }
+  .lnode .no { font: 10px var(--mono); color: var(--faint); }
+  .lnode .t { font-weight: 600; font-size: 12.5px; margin-top: 2px; }
+  .lnode .d { color: var(--muted); font-size: 11.5px; margin-top: 4px; }
+  .lnode.hot { border-color: #d9b06a; background: var(--warn-soft); }
+  .loopback { margin-top: 10px; text-align: center; font-size: 12px; color: var(--warn); }
+
+  .skilllayer { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 980px) { .skilllayer { grid-template-columns: 1fr; } }
+  .layer-col { border: 1px solid var(--line); border-radius: 8px; background: var(--white); overflow: hidden; }
+  .layer-col .col-head { padding: 10px 14px; font-weight: 600; font-size: 13px; border-bottom: 1px solid var(--line-soft); background: var(--line-soft); }
+  .layer-col .col-head .when { font-weight: 400; color: var(--faint); font-size: 11.5px; margin-left: 6px; }
+  .layer-box { padding: 12px 14px; border-bottom: 1px solid var(--line-soft); }
+  .layer-box:last-child { border-bottom: 0; }
+  .layer-box .lt { font-weight: 600; font-size: 12.5px; display: flex; align-items: center; gap: 7px; }
+  .layer-box .ld { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .badge { font-size: 10px; border-radius: 3px; padding: 1px 6px; font-weight: 500; }
+  .badge.l1 { background: var(--accent-soft); color: var(--accent); }
+  .badge.l2 { background: var(--warn-soft); color: var(--warn); }
+  .badge.l3 { background: var(--violet-soft); color: var(--violet); }
+  .badge.always { background: var(--ok-soft); color: var(--ok); }
+
+  .skill-card { border: 1px solid var(--line); border-radius: 8px; background: var(--white); padding: 14px 16px; }
+  .skill-card .hd { display: flex; align-items: center; gap: 8px; }
+  .skill-card .nm { font-weight: 600; font-size: 14px; font-family: var(--mono); }
+  .skill-card .ds { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+  .skill-card .pt { margin-top: 8px; font: 11px var(--mono); color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 3px 8px; display: inline-block; }
+
+  .promptbox { background: #0f1720; color: #d7e2ec; border-radius: 8px; padding: 14px 16px; font: 12px/1.7 var(--mono); overflow-x: auto; white-space: pre-wrap; }
+  .promptbox .dim { color: #5d7185; }
+
+  table.tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .tbl th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .tbl td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  .tbl tr:last-child td { border-bottom: 0; }
+  .tbl code { font-size: 11.5px; background: var(--line-soft); border-radius: 3px; padding: 1px 5px; }
+  .dep { font-size: 11px; border-radius: 3px; padding: 1px 6px; white-space: nowrap; }
+  .dep.none { background: var(--ok-soft); color: var(--ok); }
+  .dep.some { background: var(--warn-soft); color: var(--warn); }
+
+  .ms { display: flex; gap: 12px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }
+  .ms:last-child { border-bottom: 0; }
+  .ms .chk { flex: 0 0 auto; width: 20px; height: 20px; border-radius: 5px; border: 1.5px solid var(--line); text-align: center; font-size: 12px; line-height: 19px; color: #fff; }
+  .ms.done .chk { background: var(--ok); border-color: var(--ok); }
+  .ms.todo .chk { border-style: dashed; }
+  .ms .id { flex: 0 0 52px; font: 11.5px var(--mono); color: var(--faint); margin-top: 2px; }
+  .ms .tx { font-size: 13px; }
+  .ms.todo .tx { color: var(--muted); }
+  .progress { height: 8px; border-radius: 4px; background: var(--line-soft); overflow: hidden; }
+  .progress > div { height: 100%; background: var(--ok); border-radius: 4px; }
+
+  .law { display: flex; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line-soft); }
+  .law:last-child { border-bottom: 0; }
+  .law .no { flex: 0 0 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font: 12px/26px var(--mono); text-align: center; }
+  .law .t { font-weight: 600; font-size: 13px; }
+  .law .d { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+
+  .docs-split { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 1000px) { .docs-split { grid-template-columns: 1fr; } }
+  .doc-list { border: 1px solid var(--line); border-radius: 8px; background: var(--white); overflow-y: auto; max-height: calc(100vh - 210px); }
+  .doc-group { padding: 9px 12px 4px; font-size: 11px; color: var(--faint); font-weight: 600; letter-spacing: .04em; background: var(--line-soft); }
+  .doc-item { width: 100%; text-align: left; background: transparent; border: 0; border-top: 1px solid var(--line-soft); padding: 10px 13px; cursor: pointer; display: block; font: inherit; }
+  .doc-item:hover { background: var(--line-soft); }
+  .doc-item.active { background: var(--accent-soft); }
+  .doc-item .nm { font-weight: 500; font-size: 12.5px; }
+  .doc-item .sm { color: var(--muted); font-size: 11.5px; margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .doc-item .mt { margin-top: 4px; font: 10.5px var(--mono); color: var(--faint); }
+  .reader { border: 1px solid var(--line); border-radius: 8px; background: var(--white); min-height: 300px; }
+  .reader-head { padding: 12px 18px; border-bottom: 1px solid var(--line-soft); display: flex; align-items: center; gap: 10px; }
+  .reader-head .t { font-weight: 600; }
+  .reader-head .tag { font-size: 10.5px; border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px; color: var(--muted); }
+  .reader-body { padding: 6px 26px 30px; max-height: calc(100vh - 250px); overflow-y: auto; }
+
+  .md h1 { font-size: 17px; margin: 22px 0 10px; }
+  .md h2 { font-size: 15px; margin: 20px 0 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line-soft); }
+  .md h3 { font-size: 13.5px; margin: 16px 0 6px; }
+  .md h4 { font-size: 13px; margin: 14px 0 4px; }
+  .md p { margin: 8px 0; font-size: 13px; }
+  .md ul, .md ol { margin: 8px 0; padding-left: 22px; font-size: 13px; }
+  .md li { margin: 3px 0; }
+  .md pre { background: #f4f6f8; border: 1px solid var(--line-soft); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font: 12px/1.6 var(--mono); }
+  .md pre code { background: none; padding: 0; }
+  .md code { background: var(--line-soft); border-radius: 3px; padding: 1px 5px; font-size: 12px; }
+  .md blockquote { margin: 10px 0; padding: 6px 14px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 6px 6px 0; color: #3d4a55; }
+  .md blockquote p { margin: 4px 0; }
+  .md table { border-collapse: collapse; margin: 12px 0; font-size: 12.5px; width: 100%; display: block; overflow-x: auto; }
+  .md th, .md td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+  .md th { background: var(--line-soft); }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
+  .md .mermaid-box { background: #fff; border: 1px dashed var(--line); border-radius: 6px; padding: 10px; margin: 12px 0; text-align: center; overflow-x: auto; }
+  .md .mermaid-box .src { text-align: left; margin-top: 6px; }
+  .md .mermaid-box .src summary { font-size: 11px; color: var(--faint); cursor: pointer; }
+  .md .mmd-svg svg { max-width: 100%; height: auto; }
+
+  .empty { color: var(--faint); padding: 24px 4px; text-align: center; }
+  .pill { font-size: 11px; border-radius: 10px; padding: 2px 9px; }
+  .pill.live { background: var(--ok-soft); color: var(--ok); }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="title">szabot · 项目地图</div>
+      <div class="sub">README 与 docs 的可视化蒸馏</div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="ctx">
+      <div class="row"><span>技能数据</span><b>实时读取</b></div>
+      <div class="row"><span>评审工作台</span><b>:8090</b></div>
+      <div class="row"><span>Web 聊天</span><b>:8080</b></div>
+    </div>
+  </aside>
+  <main class="work" id="work"></main>
+</div>
+
+<script src="/vendor/mermaid.min.js" defer></script>
+<script>
+"use strict";
+
+/* ================= 数据 ================= */
+
+var NAV = [
+  { id: 'overview', ico: '◎', lbl: '总览' },
+  { id: 'arch',     ico: '▦', lbl: '架构' },
+  { id: 'flow',     ico: '⇄', lbl: '消息流' },
+  { id: 'skills',   ico: '✦', lbl: '技能系统' },
+  { id: 'tools',    ico: '⚙', lbl: '工具箱' },
+  { id: 'roadmap',  ico: '▽', lbl: '路线图' },
+  { id: 'docs',     ico: '☰', lbl: '文档库' },
+];
+
+var ROLES = [
+  { name: 'Channel', pkg: 'internal/channels', dir: 'out', dirTxt: '朝外',
+    duty: '平台翻译官：把 CLI stdin/stdout、Web HTTP/SSE 等原生消息 ⇄ 统一的 Inbound / OutboundMessage。' },
+  { name: 'MessageBus', pkg: 'internal/bus', dir: 'mid', dirTxt: '中枢',
+    duty: 'Go channel 实现的入站 / 出站两条队列。Channel 与 AgentLoop 之间的唯一通道，天然解耦两端。' },
+  { name: 'AgentLoop', pkg: 'internal/agent/loop.go', dir: 'mid', dirTxt: '中间',
+    duty: '从 bus 消费消息、按 SessionID 加载 jsonl 会话历史、组装上下文、调 Runner、把回复推回 bus。' },
+  { name: 'AgentRunner', pkg: 'internal/agent/runner.go', dir: 'in', dirTxt: '朝内',
+    duty: '跟 Provider 多轮对话，负责 tool calling 循环：请求模型 → 执行工具 → 回传结果 → 直到最终答案。' },
+  { name: 'Provider', pkg: 'internal/providers', dir: 'in', dirTxt: '朝内',
+    duty: '统一各家 LLM API。内置 Echo（零依赖验证链路）与 OpenAI 兼容实现（DeepSeek / OpenAI / Moonshot / Ollama…）。' },
+];
+
+var JOURNEY = [
+  { t: '用户输入', d: 'CLI：终端敲下一行字；Web：POST /api/send。两种入口最终殊途同归。', refs: ['channels/cli.go'] },
+  { t: 'Channel 翻译', d: 'Channel 把平台原生输入翻译成统一的 InboundMessage（SessionID + 文本），投递到 bus.Inbound。', refs: ['bus/events.go'] },
+  { t: 'AgentLoop 消费', d: 'Loop 的常驻 goroutine 从 bus 取出消息，按 SessionID 加载磁盘上的 jsonl 会话历史。', refs: ['agent/loop.go', 'agent/session.go'] },
+  { t: '组装上下文', d: 'system prompt（启动时构建、全程不变）+ 历史（从 jsonl 加载）+ 本轮 user。前缀恒定，KV Cache 友好。', refs: ['cmd/szabot/main.go'] },
+  { t: '请求 LLM', d: 'Runner 调 Provider 发起请求；回复以增量 Delta 推送，而非整段等待。', refs: ['agent/runner.go'] },
+  { t: '工具调用循环', d: '模型返回 tool_calls 时：查 Registry 白名单 → 校验参数 → 执行 → 结果作为 tool 消息回传 → 再次请求模型。循环直到模型不再要工具。', refs: ['tools/tool.go'], loop: true },
+  { t: '流式输出', d: '最终答案逐字生成逐字推：Delta 经 bus.Outbound 到达 Channel，CLI 打字机输出 / Web 经 SSE 推给浏览器。', refs: ['bus/events.go'] },
+  { t: '持久化', d: '旁路把流式增量聚合成完整消息，追加写入 sessionlogs/&lt;SessionID&gt;.jsonl（append + fsync）。下一轮对话自动带上上下文。', refs: ['agent/session.go'] },
+];
+
+var TOOLLOOP = [
+  { t: '模型请求工具', d: '模型只有「请求调用」权限：返回 tool_calls（名称 + JSON 参数），不直接执行任何本机函数。' },
+  { t: '查注册表', d: 'Runner 按名称在 Registry 查找。Registry 是显式 allowlist：nil、空名、坏 schema、重名都会被拒。' },
+  { t: '校验并执行', d: '按 JSON Schema 校验参数后执行：文件类工具限制在 workspace 内，bash/python 跑在 Docker 沙盒。' },
+  { t: '结果回传', d: '执行结果包装成 role=tool 的消息 append 进对话上下文。' },
+  { t: '再次请求模型', d: '带上工具结果重新请求 LLM。模型若还要工具 → 回到第 1 步；不再要 → 产出最终答案。', hot: true },
+];
+
+var SESSION_POINTS = [
+  ['一 session 一文件', 'sessionlogs/&lt;SessionID&gt;.jsonl，每行一条消息 JSON。对话只在末尾增长，Append 即追加一行 + fsync。'],
+  ['system prompt 不落盘', '启动时构建、全程不变，每次请求恒定拼在最前——既不反复写盘，又保证前缀稳定、对 KV Cache 友好。'],
+  ['直穿 + 旁路双路分离', '同一份 LLM 输出分两路：直穿路实时把 Delta 推给前端展示；旁路路聚合成完整消息用于持久化与下一轮上下文。'],
+  ['SSE 而非 WebSocket', 'agent 输出本就是服务端单向流式推送，SSE 天生贴合；多浏览器连接按 SessionID 扇出，互不串台。'],
+];
+
+var TOOLS = [
+  { grp: '文件类（workspace 沙盒）', items: [
+    ['read_file', '读取 UTF-8 文本文件（≤32KiB），拒绝绝对路径与穿越', '无'],
+    ['write_file', '覆盖写文件', '无'],
+    ['edit_file', '精确字符串替换编辑', '无'],
+    ['list_dir', '列目录（可递归），忽略 .git/node_modules 等噪声', '无'],
+    ['glob', '按文件名模式查找，支持 ** 递归', '无'],
+    ['grep', '按正则搜索文件内容', '无'],
+  ]},
+  { grp: '网络类', items: [
+    ['web_fetch', '读取网页 URL，剥掉 HTML 标签返回正文', '无'],
+    ['web_search', '搜索互联网（Tavily API）', 'TAVILY_API_KEY'],
+  ]},
+  { grp: '交互类', items: [
+    ['todo_write', '创建/更新任务清单，按 session 记录计划与进度（Agent 状态栏数据源）', '无'],
+    ['ask_user_question', '任务中途暂停、向用户提问、等回答后继续（走 bus 双向通道）', '无'],
+  ]},
+  { grp: '沙盒执行类', items: [
+    ['bash', '在 Docker 沙盒执行 bash，默认断网', 'Docker + SZABOT_SANDBOX=1'],
+    ['python', '代码解释器，在 Docker 沙盒执行 Python', 'Docker + SZABOT_SANDBOX=1'],
+  ]},
+];
+
+var MILESTONES = [
+  ['M1', '项目骨架', true],
+  ['M2', 'MessageBus', true],
+  ['M3', 'AgentLoop + AgentRunner（最小循环）', true],
+  ['M4', 'CLI Channel', true],
+  ['M5', 'EchoProvider（零依赖验证链路）', true],
+  ['M6', 'OpenAI 兼容 Provider（DeepSeek 已接入）', true],
+  ['M7', '配置加载（~/.szabot/config.json）', false],
+  ['M8', 'Session 存储（jsonl）', true],
+  ['M9', 'Tool 接口 + 文件工具', true],
+  ['M10', 'Runner 多轮 + tool calling 循环', true],
+  ['M10.5', '执行类工具 bash/python（Docker 沙盒）', true],
+  ['M10.6', 'web_search / web_fetch / todo_write / ask_user_question', true],
+  ['M11', '第二个 Channel（HTTP + SSE Web 界面）', true],
+  ['M12', '长期记忆（MEMORY.md）', false],
+];
+
+var LAWS = [
+  ['Core stays small', '所有新功能挂在 channel / tool / provider / skill 边上，不往 loop 塞业务。'],
+  ['Less structure, more intelligence', '第二个实现出现时再抽接口。'],
+  ['Prefer duplication over premature abstraction', '不写 BaseChannel 这种父类。'],
+  ['Explicit over magical', '所有可配置项必须出现在 config struct 里。'],
+];
+
+var overviewData = { skills: [], l1Summary: '', alwaysBodiesBytes: 0, stats: {} };
+var docsData = [];
+var currentDoc = null;
+
+/* ================= 工具函数 ================= */
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function esc(s) { return escapeHtml(s); }
+
+function renderRoles() {
+  return ROLES.map(function (r, i) {
+    return (i > 0 ? '<div class="arch-sep">⇄</div>' : '') +
+      '<div class="arch-node">' +
+      '<span class="dir ' + r.dir + '">' + r.dirTxt + '</span>' +
+      '<div class="role">' + r.name + '</div>' +
+      '<div class="pkg">' + r.pkg + '</div>' +
+      '<div class="duty">' + r.duty + '</div>' +
+      '</div>';
+  }).join('');
+}
+
+/* ================= 视图 ================= */
+
+function viewOverview() {
+  var done = MILESTONES.filter(function (m) { return m[2]; }).length;
+  var pct = Math.round(done / MILESTONES.length * 100);
+  var alwaysN = overviewData.skills.filter(function (s) { return s.always; }).length;
+  return '<div class="work-head"><h1>总览</h1>' +
+    '<p>szabot（yomi）是一个用 Go 实现的轻量 agent 框架：一条极简的核心循环（消息总线 → AgentLoop → Runner → Provider），能力全部从边缘扩展。本页把 README 与 docs/ 蒸馏成一屏可读的地图。</p></div>' +
+    '<div class="grid4" style="margin-bottom:16px">' +
+    metric(overviewData.stats.goFiles, 'Go 源文件', 'cmd/ + internal/') +
+    metric(overviewData.stats.skills, '技能', alwaysN + ' 个常驻 · ' + (overviewData.stats.skills - alwaysN) + ' 个按需') +
+    metric(overviewData.stats.tools, '工具', '文件 / 网络 / 交互 / 沙盒') +
+    metric(overviewData.stats.docs, '文档', 'docs/ 下的归档长文') +
+    '</div>' +
+    '<div class="card"><div class="card-head"><h2>设计宪法</h2><span class="hint">所有取舍的最高依据</span></div>' +
+    '<div class="card-body">' + LAWS.map(function (l, i) {
+      return '<div class="law"><div class="no">' + (i + 1) + '</div><div><div class="t">' + esc(l[0]) + '</div><div class="d">' + esc(l[1]) + '</div></div></div>';
+    }).join('') + '</div></div>' +
+    '<div class="card"><div class="card-head"><h2>里程碑进度</h2><span class="hint">' + done + ' / ' + MILESTONES.length + ' 完成（' + pct + '%）</span></div>' +
+    '<div class="card-body"><div class="progress" style="margin-bottom:14px"><div style="width:' + pct + '%"></div></div>' +
+    '<div class="grid2">' + MILESTONES.map(function (m) {
+      return '<div class="ms ' + (m[2] ? 'done' : 'todo') + '"><div class="chk">' + (m[2] ? '✓' : '') + '</div><div class="id">' + m[0] + '</div><div class="tx">' + esc(m[1]) + '</div></div>';
+    }).join('') + '</div></div></div>';
+}
+
+function metric(v, k, s) {
+  return '<div class="metric"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="s">' + s + '</div></div>';
+}
+
+function viewArch() {
+  return '<div class="work-head"><h1>架构</h1>' +
+    '<p>五个核心角色，一条消息从左到右流经所有角色再流回来。Core stays small：这条主干上没有业务，业务全部挂在边缘（Channel / Tool / Provider / Skill）。</p></div>' +
+    '<div class="card"><div class="card-head"><h2>核心链路</h2><span class="hint">悬停查看职责</span></div>' +
+    '<div class="card-body"><div class="arch">' + renderRoles() + '</div>' +
+    '<div class="arch-leg"><span class="rolemark dot-out"></span>朝外（面向用户）&nbsp;&nbsp;<span class="rolemark dot-mid"></span>中枢 / 中间&nbsp;&nbsp;<span class="rolemark dot-in"></span>朝内（面向 LLM）</div>' +
+    '</div></div>' +
+    '<div class="card"><div class="card-head"><h2>挂在边缘的能力</h2></div>' +
+    '<div class="card-body"><table class="tbl"><tr><th>扩展点</th><th>目录</th><th>扩展方式</th></tr>' +
+    '<tr><td><b>Channel</b></td><td><code>internal/channels</code></td><td>实现 Channel 接口即可新增一个前端（CLI / Web 已有）</td></tr>' +
+    '<tr><td><b>Provider</b></td><td><code>internal/providers</code></td><td>实现 Provider 接口即可接入新的 LLM 服务</td></tr>' +
+    '<tr><td><b>Tool</b></td><td><code>internal/tools</code></td><td>实现 Tool 接口 + 装配层 Register，模型即可调用</td></tr>' +
+    '<tr><td><b>Skill</b></td><td><code>skills/</code></td><td>往目录里丢一个 &lt;name&gt;/SKILL.md 即可，无需改代码</td></tr>' +
+    '</table></div></div>';
+}
+
+function viewFlow() {
+  return '<div class="work-head"><h1>消息流</h1>' +
+    '<p>一条消息从用户输入到收到回复的完整旅程，以及其中两个最精巧的设计：tool calling 循环与「直穿 + 旁路」的流式持久化分离。细节归档见文档库的「架构流程」组。</p></div>' +
+    '<div class="card"><div class="card-head"><h2>一条消息的旅程</h2><span class="hint">自上而下</span></div>' +
+    '<div class="card-body"><div class="journey">' +
+    JOURNEY.map(function (s, i) {
+      return '<div class="jstep ' + (s.loop ? 'loop' : '') + '"><div class="dot">' + (i + 1) + '</div>' +
+        '<div class="t">' + s.t + (s.loop ? ' <span class="badge always">循环</span>' : '') + '</div>' +
+        '<div class="d">' + s.d + '</div>' +
+        '<div class="refs">' + s.refs.map(function (r) { return '<code>' + r + '</code>'; }).join(' ') + '</div></div>';
+    }).join('') + '</div></div></div>' +
+    '<div class="card"><div class="card-head"><h2>Function Calling 循环</h2><span class="hint">模型只有请求权，没有执行权</span></div>' +
+    '<div class="card-body"><div class="loopflow">' +
+    TOOLLOOP.map(function (n) {
+      return '<div class="lnode ' + (n.hot ? 'hot' : '') + '"><div class="no">STEP</div><div class="t">' + n.t + '</div><div class="d">' + n.d + '</div></div>';
+    }).join('') + '</div>' +
+    '<div class="loopback">↑ 第 5 步若模型还要工具：↺ 回到第 1 步；不再要 → 输出最终答案</div>' +
+    '</div></div>' +
+    '<div class="card"><div class="card-head"><h2>会话与流式的四个关键设计</h2></div>' +
+    '<div class="card-body"><div class="grid2">' +
+    SESSION_POINTS.map(function (p) {
+      return '<div class="skill-card"><div class="hd"><div class="nm" style="font-size:13px">' + p[0] + '</div></div><div class="ds">' + p[1] + '</div></div>';
+    }).join('') + '</div></div></div>';
+}
+
+function skillCard(s) {
+  return '<div class="skill-card"><div class="hd"><div class="nm">' + esc(s.name) + '</div>' +
+    (s.always ? '<span class="badge always">常驻</span>' : '<span class="badge l2">按需</span>') + '</div>' +
+    '<div class="ds">' + esc(s.description || '') + '</div>' +
+    '<div class="pt">' + esc(s.relPath) + '</div></div>';
+}
+
+function viewSkills() {
+  var always = overviewData.skills.filter(function (s) { return s.always; });
+  var ondemand = overviewData.skills.filter(function (s) { return !s.always; });
+  return '<div class="work-head"><h1>技能系统</h1>' +
+    '<p>三层渐进式披露（Progressive Disclosure）：把技能知识按访问频率分层，避免一次性塞满 context。左列是启动时常驻的，右列是任务触发后按需加载的——下方技能卡片与 system prompt 预览均为实时读取 skills/ 的结果。</p></div>' +
+    '<div class="card"><div class="card-head"><h2>三层模型</h2><span class="hint">L1 几十 token 常驻 · L2/L3 按需 read_file</span></div>' +
+    '<div class="card-body"><div class="skilllayer">' +
+    '<div class="layer-col"><div class="col-head">进程启动<span class="when">一次性 · 常驻</span></div>' +
+    '<div class="layer-box"><div class="lt"><span class="badge l1">L1</span>元数据摘要</div>' +
+    '<div class="ld">name + description + 相对路径，每个技能仅几十 token。固定不变 → KV Cache 友好。作用是「触发信号 + 路径指针」。</div></div>' +
+    '<div class="layer-box"><div class="lt"><span class="badge always">always</span>常驻正文</div>' +
+    '<div class="ld">always=true 的技能（如路由器 szbot）剥离 frontmatter 后正文直接拼进 system prompt，且不占 L1 摘要的行。适合必须「第一句话就生效」的规则——例如路由器不能坐在它自己裁判的触发流程后面。</div></div></div>' +
+    '<div class="layer-col"><div class="col-head">任务触发<span class="when">运行时 · 按需</span></div>' +
+    '<div class="layer-box"><div class="lt"><span class="badge l2">L2</span>SKILL.md 正文</div>' +
+    '<div class="ld">LLM 命中 L1 的 description → 用现成的 read_file 读取路径 → 核心流程进入 context。无需专门的 load 工具。</div></div>' +
+    '<div class="layer-box"><div class="lt"><span class="badge l3">L3</span>references / 脚本 / 资产</div>' +
+    '<div class="ld">正文引导下自行决定读或执行；脚本甚至可以直接跑而不必读入 context。</div></div></div>' +
+    '</div></div></div>' +
+    '<div class="card"><div class="card-head"><h2>当前技能</h2><span class="pill live">实时</span><span class="hint">读取 skills/ 目录</span></div>' +
+    '<div class="card-body">' +
+    (always.length ? '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">常驻（always=true，共 ' + overviewData.alwaysBodiesBytes + ' 字节）</div>' +
+      '<div class="grid2" style="margin-bottom:16px">' + always.map(skillCard).join('') + '</div>' : '') +
+    '<div style="font-size:12px;color:var(--muted);margin-bottom:8px">按需加载（L2）</div>' +
+    '<div class="grid2">' + (ondemand.map(skillCard).join('') || '<div class="empty">无</div>') + '</div>' +
+    '</div></div>' +
+    '<div class="card"><div class="card-head"><h2>system prompt 预览</h2><span class="pill live">实时</span><span class="hint"># Skills 段实际内容</span></div>' +
+    '<div class="card-body"><div class="promptbox"><span class="dim"># Active Skills</span>\n### Skill: szbot\n<span class="dim">（路由器正文，' + overviewData.alwaysBodiesBytes + ' 字节，此处省略）</span>\n\n<span class="dim"># Skills</span>\n' + esc(overviewData.l1Summary || '（无按需技能）') + '</div></div></div>';
+}
+
+function viewTools() {
+  return '<div class="work-head"><h1>工具箱</h1>' +
+    '<p>模型通过 Function Calling 调用这些工具；Registry 是显式白名单，只有注册过的工具对模型可见。文件类工具被沙盒在 workspace 内，执行类工具跑在 Docker 容器里。</p></div>' +
+    TOOLS.map(function (g) {
+      return '<div class="card"><div class="card-head"><h2>' + g.grp + '</h2></div>' +
+        '<div class="card-body" style="padding-top:6px"><table class="tbl">' +
+        '<tr><th style="width:150px">工具</th><th>说明</th><th style="width:210px">依赖</th></tr>' +
+        g.items.map(function (t) {
+          return '<tr><td><code>' + t[0] + '</code></td><td>' + t[1] + '</td><td><span class="dep ' + (t[2] === '无' ? 'none' : 'some') + '">' + t[2] + '</span></td></tr>';
+        }).join('') + '</table></div></div>';
+    }).join('');
+}
+
+function viewRoadmap() {
+  var done = MILESTONES.filter(function (m) { return m[2]; }).length;
+  return '<div class="work-head"><h1>路线图</h1>' +
+    '<p>从最小骨架到完整 agent 的演进轨迹。每一格都对应一次「核心不动、边缘扩展」的迭代。</p></div>' +
+    '<div class="card"><div class="card-head"><h2>里程碑</h2><span class="hint">' + done + ' / ' + MILESTONES.length + '</span></div>' +
+    '<div class="card-body">' + MILESTONES.map(function (m) {
+      return '<div class="ms ' + (m[2] ? 'done' : 'todo') + '"><div class="chk">' + (m[2] ? '✓' : '') + '</div><div class="id">' + m[0] + '</div><div class="tx">' + esc(m[1]) + '</div></div>';
+    }).join('') + '</div></div>';
+}
+
+function viewDocs() {
+  return '<div class="work-head"><h1>文档库</h1>' +
+    '<p>docs/ 下 ' + docsData.length + ' 篇归档文档的索引与在线阅读。摘要是人工蒸馏的一句话；正文原样渲染，mermaid 图直接出图（渲染失败时回退为源码）。</p></div>' +
+    '<div class="docs-split"><div class="doc-list" id="doc-list"></div>' +
+    '<div class="reader" id="reader"><div class="reader-head"><span class="t">选择左侧一篇文档开始阅读</span></div>' +
+    '<div class="reader-body"><div class="empty">点击任意文档查看正文</div></div></div></div>';
+}
+
+/* ================= 文档列表与打开 ================= */
+
+function renderDocList() {
+  var list = document.getElementById('doc-list');
+  if (!list) return;
+  if (!docsData.length) { list.innerHTML = '<div class="empty">docs/ 目录为空</div>'; return; }
+  var groups = [];
+  docsData.forEach(function (d) { if (groups.indexOf(d.group) < 0) groups.push(d.group); });
+  list.innerHTML = groups.map(function (g) {
+    return '<div class="doc-group">' + esc(g) + '</div>' + docsData.filter(function (d) { return d.group === g; }).map(function (d) {
+      return '<button class="doc-item ' + (currentDoc === d.name ? 'active' : '') + '" data-doc="' + esc(d.name) + '">' +
+        '<div class="nm">' + esc(d.title) + (d.hasMermaid ? ' <span style="font-size:10px;color:var(--accent)">◈ 图</span>' : '') + '</div>' +
+        '<div class="sm">' + esc(d.summary) + '</div>' +
+        '<div class="mt">' + esc(d.name) + ' · ' + (d.bytes / 1024).toFixed(1) + ' KB</div></button>';
+    }).join('');
+  }).join('');
+  Array.prototype.forEach.call(list.querySelectorAll('.doc-item'), function (btn) {
+    btn.addEventListener('click', function () { openDoc(btn.getAttribute('data-doc')); });
+  });
+}
+
+function openDoc(name) {
+  currentDoc = name;
+  renderDocList();
+  var meta = docsData.filter(function (d) { return d.name === name; })[0];
+  var reader = document.getElementById('reader');
+  reader.querySelector('.reader-head').innerHTML =
+    '<span class="t">' + esc(meta.title) + '</span><span class="tag">' + esc(meta.group) + '</span>' +
+    '<span class="tag">' + (meta.bytes / 1024).toFixed(1) + ' KB</span>';
+  var body = reader.querySelector('.reader-body');
+  body.innerHTML = '<div class="empty">加载中…</div>';
+  fetch('/api/doc?name=' + encodeURIComponent(name)).then(function (res) {
+    if (!res.ok) throw new Error(res.statusText);
+    return res.text();
+  }).then(function (md) {
+    body.innerHTML = '<div class="md">' + renderMarkdown(md) + '</div>';
+    body.scrollTop = 0;
+    renderMermaidIn(body);
+  }).catch(function (e) {
+    body.innerHTML = '<div class="empty">加载失败：' + esc(String(e)) + '</div>';
+  });
+}
+
+/* ================= mermaid 图渲染（失败回退为源码块） ================= */
+
+function renderMermaidIn(container) {
+  var tryRender = function (attempt) {
+    var m = window.mermaid;
+    if (!m) {
+      // 3.4MB 的本地脚本加载可能稍慢于用户点开文档，最多等 4 秒。
+      if (attempt < 40) setTimeout(function () { tryRender(attempt + 1); }, 100);
+      return;
+    }
+    if (!window.__mermaidReady) {
+      m.initialize({ startOnLoad: false, theme: 'neutral' });
+      window.__mermaidReady = true;
+    }
+    var codes = container.querySelectorAll('.mermaid-box > pre > code');
+    var seq = Date.now();
+    Array.prototype.forEach.call(codes, function (code, i) {
+      var pre = code.parentNode;
+      var box = pre.parentNode;
+      var id = 'mmd-' + seq + '-' + i;
+      var onSuccess = function (r) {
+        var holder = document.createElement('div');
+        holder.className = 'mmd-svg';
+        holder.innerHTML = r.svg;
+        box.insertBefore(holder, box.firstChild);
+        pre.style.display = 'none'; // 源码仍可从 <details> 里看
+      };
+      var onError = function (err) {
+        // Keep the source visible, but expose the parser error for diagnosis.
+        console.error('Mermaid render failed', err);
+      };
+      try {
+        var rendered = m.render(id, code.textContent);
+        if (rendered && typeof rendered.then === 'function') {
+          rendered.then(onSuccess).catch(onError);
+        } else if (m.mermaidAPI && typeof m.mermaidAPI.render === 'function') {
+          // Mermaid 8 and earlier expose the callback-based mermaidAPI.
+          m.mermaidAPI.render(id, code.textContent, onSuccess);
+        } else {
+          onError(new Error('Unsupported Mermaid render API'));
+        }
+      } catch (err) {
+        onError(err);
+      }
+    });
+  };
+  tryRender(0);
+}
+
+/* ================= 轻量 Markdown 渲染 ================= */
+
+function inlineMd(s) {
+  var t = escapeHtml(s);
+  t = t.replace(/`([^`]+)`/g, function (m, c) { return '<code>' + c + '</code>'; });
+  t = t.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function (m, txt, url) {
+    if (/^https?:\/\//.test(url)) return '<a href="' + url + '" target="_blank" rel="noopener">' + txt + '</a>';
+    return '<code style="font-size:11px">' + txt + '</code>';
+  });
+  return t;
+}
+
+function splitRow(l) {
+  return l.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(function (c) { return c.trim(); });
+}
+
+function renderMarkdown(src) {
+  var lines = src.split(/\r?\n/);
+  var out = [];
+  var para = [];
+  var i = 0;
+
+  function flush() {
+    if (para.length) out.push('<p>' + para.map(inlineMd).join('<br>') + '</p>');
+    para = [];
+  }
+
+  while (i < lines.length) {
+    var line = lines[i];
+
+    var fence = line.match(/^```(\w*)\s*$/);
+    if (fence) {
+      flush();
+      var lang = fence[1];
+      var buf = [];
+      i++;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++;
+      var code = escapeHtml(buf.join('\n'));
+      if (lang === 'mermaid') {
+        out.push('<div class="mermaid-box"><pre style="border:0;background:none"><code>' + code + '</code></pre>' +
+          '<div class="src"><details><summary>mermaid 源码（渲染失败时可复制到 mermaid.live 查看）</summary>' +
+          '<pre><code>' + code + '</code></pre></details></div></div>');
+      } else {
+        out.push('<pre><code>' + code + '</code></pre>');
+      }
+      continue;
+    }
+
+    var h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { flush(); var lv = Math.min(h[1].length, 4); out.push('<h' + lv + '>' + inlineMd(h[2]) + '</h' + lv + '>'); i++; continue; }
+
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { flush(); out.push('<hr>'); i++; continue; }
+
+    if (/^\s*>/.test(line)) {
+      flush();
+      var qb = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) { qb.push(lines[i].replace(/^\s*>\s?/, '')); i++; }
+      out.push('<blockquote>' + qb.map(inlineMd).join('<br>') + '</blockquote>');
+      continue;
+    }
+
+    if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      flush();
+      var head = splitRow(lines[i]);
+      i += 2;
+      var rows = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(splitRow(lines[i])); i++; }
+      var t = '<table><tr>' + head.map(function (c) { return '<th>' + inlineMd(c) + '</th>'; }).join('') + '</tr>';
+      rows.forEach(function (r) {
+        t += '<tr>' + r.map(function (c) { return '<td>' + inlineMd(c) + '</td>'; }).join('') + '</tr>';
+      });
+      out.push(t + '</table>');
+      continue;
+    }
+
+    var ul = line.match(/^\s*[-*+]\s+(.*)$/);
+    var ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (ul || ol) {
+      flush();
+      var ordered = !!ol;
+      var items = [];
+      while (i < lines.length) {
+        var m = lines[i].match(ordered ? /^\s*\d+[.)]\s+(.*)$/ : /^\s*[-*+]\s+(.*)$/);
+        if (!m) break;
+        items.push(m[1]);
+        i++;
+      }
+      out.push('<' + (ordered ? 'ol' : 'ul') + '>' + items.map(function (x) { return '<li>' + inlineMd(x) + '</li>'; }).join('') + '</' + (ordered ? 'ol' : 'ul') + '>');
+      continue;
+    }
+
+    if (line.trim() === '') { flush(); i++; continue; }
+    para.push(line);
+    i++;
+  }
+  flush();
+  return out.join('\n');
+}
+
+/* ================= 装配 ================= */
+
+var views = {
+  overview: viewOverview, arch: viewArch, flow: viewFlow, skills: viewSkills,
+  tools: viewTools, roadmap: viewRoadmap, docs: viewDocs,
+};
+
+function activate(id) {
+  Array.prototype.forEach.call(document.querySelectorAll('.nav-item'), function (n) {
+    n.classList.toggle('active', n.getAttribute('data-view') === id);
+  });
+  var work = document.getElementById('work');
+  work.innerHTML = '<div class="view active">' + views[id]() + '</div>';
+  if (id === 'docs') renderDocList();
+}
+
+function buildNav() {
+  var nav = document.getElementById('nav');
+  nav.innerHTML = NAV.map(function (n) {
+    return '<button class="nav-item" data-view="' + n.id + '"><span class="ico">' + n.ico + '</span><span class="lbl">' + n.lbl + '</span></button>';
+  }).join('');
+  Array.prototype.forEach.call(nav.querySelectorAll('.nav-item'), function (n) {
+    n.addEventListener('click', function () { activate(n.getAttribute('data-view')); });
+  });
+}
+
+function init() {
+  buildNav();
+  Promise.all([
+    fetch('/api/overview').then(function (r) { return r.json(); }),
+    fetch('/api/docs').then(function (r) { return r.json(); }),
+  ]).then(function (rs) {
+    overviewData = rs[0];
+    docsData = rs[1] || [];
+    activate('overview');
+  }).catch(function (e) {
+    document.getElementById('work').innerHTML = '<div class="empty">数据加载失败：' + esc(String(e)) + '</div>';
+  });
+}
+
+init();
+</script>
+</body>
+</html>

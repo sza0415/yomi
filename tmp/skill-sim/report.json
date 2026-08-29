@@ -1,0 +1,554 @@
+{
+  "skill_version": "kbcli@2025-08-20",
+  "metrics": {
+    "total_cases": 4,
+    "passed_cases": 3,
+    "failed_cases": 1,
+    "path_coverage": 1,
+    "node_coverage": 1,
+    "path_match_rate": 1,
+    "node_pass_rate": 0.8571428571428571,
+    "output_pass_rate": 0.8,
+    "skill_selection_rate": 1,
+    "chain_pass_rate": 0.8333333333333334,
+    "notice_pass_rate": 0.6666666666666666
+  },
+  "results": [
+    {
+      "case_id": "kbcli-dsl-simple-query",
+      "name": "查数 → DSL 模式 → 简单查询分支",
+      "passed": true,
+      "expected": {
+        "path_id": "path_kbcli",
+        "nodes": [
+          "match_intent",
+          "read_references",
+          "decision_main",
+          "node_recall",
+          "decision_search_mode",
+          "node_dsl_mode",
+          "check_capability",
+          "output_dsl",
+          "path_kbcli"
+        ],
+        "node_specs": [
+          {
+            "id": "node_recall",
+            "kind": "tool",
+            "tool": "kbcli kb-recall",
+            "required": true
+          },
+          {
+            "id": "node_dsl_mode",
+            "kind": "tool",
+            "tool": "kbcli kb-search",
+            "required": false
+          }
+        ],
+        "expected_skills": [
+          {
+            "name": "kbcli",
+            "required": true
+          }
+        ],
+        "execution_chain": [
+          {
+            "id": "node_recall",
+            "kind": "tool",
+            "tool": "kbcli kb-recall",
+            "required": true
+          },
+          {
+            "id": "node_dsl_mode",
+            "kind": "tool",
+            "tool": "kbcli kb-search",
+            "required": true
+          }
+        ],
+        "output_spec": {
+          "type": "ID元数据",
+          "contains": [
+            "项目ID"
+          ]
+        }
+      },
+      "actual": {
+        "case_id": "kbcli-dsl-simple-query",
+        "run_id": "run-003-dsl-simple",
+        "skill_version": "kbcli@2025-08-20",
+        "status": "ok",
+        "selected_skills": [
+          "kbcli"
+        ],
+        "actual_path": [
+          "match_intent",
+          "read_references",
+          "decision_main",
+          "node_recall",
+          "decision_search_mode",
+          "node_dsl_mode",
+          "check_capability",
+          "output_dsl",
+          "path_kbcli"
+        ],
+        "execution_chain": [
+          {
+            "id": "node_recall",
+            "skill": "kbcli",
+            "kind": "tool",
+            "tool": "kbcli kb-recall",
+            "required": true
+          },
+          {
+            "id": "node_dsl_mode",
+            "skill": "kbcli",
+            "kind": "tool",
+            "tool": "kbcli kb-search",
+            "required": true
+          }
+        ],
+        "tool_calls": [
+          "kbcli kb-recall",
+          "kbcli kb-search"
+        ],
+        "output_type": "ID元数据",
+        "output_text": "查询到《逐玉》项目ID：OPIID-逐玉2024，对应分类为：电视剧。"
+      }
+    },
+    {
+      "case_id": "kbcli-script-sage-correct",
+      "name": "剧本专家问答 - 正确路径（sage 分支）",
+      "passed": true,
+      "expected": {
+        "path_id": "path_kbcli",
+        "nodes": [
+          "match_intent",
+          "read_references",
+          "decision_main",
+          "node_sage",
+          "output_sage",
+          "path_kbcli"
+        ],
+        "node_specs": [
+          {
+            "id": "match_intent",
+            "kind": "input",
+            "required": true
+          },
+          {
+            "id": "read_references",
+            "kind": "validation",
+            "tool": "read_file",
+            "required": true
+          },
+          {
+            "id": "decision_main",
+            "kind": "decision",
+            "required": true
+          },
+          {
+            "id": "node_sage",
+            "kind": "tool",
+            "tool": "kbcli sage",
+            "required": true
+          },
+          {
+            "id": "output_sage",
+            "kind": "output",
+            "required": true
+          }
+        ],
+        "expected_skills": [
+          {
+            "name": "kbcli",
+            "required": true
+          }
+        ],
+        "execution_chain": [
+          {
+            "id": "node_sage",
+            "kind": "tool",
+            "tool": "kbcli sage",
+            "required": true
+          }
+        ],
+        "notices": [
+          "禁止跳过references凭记忆拼接命令",
+          "不得输出proj_id/scriptAnalysisId/scriptVersionId字段名或值"
+        ],
+        "output_spec": {
+          "type": "专家回答",
+          "contains": [
+            "剧本",
+            "故事"
+          ]
+        },
+        "forbidden_nodes": [
+          "node_recall",
+          "node_sql_mode",
+          "node_dsl_mode",
+          "node_mcp_fallback"
+        ]
+      },
+      "actual": {
+        "case_id": "kbcli-script-sage-correct",
+        "run_id": "run-001-correct",
+        "skill_version": "kbcli@2025-08-20",
+        "status": "ok",
+        "selected_skills": [
+          "kbcli"
+        ],
+        "actual_path": [
+          "match_intent",
+          "read_references",
+          "decision_main",
+          "node_sage",
+          "output_sage",
+          "path_kbcli"
+        ],
+        "execution_chain": [
+          {
+            "id": "match_intent",
+            "skill": "kbcli",
+            "kind": "input",
+            "required": true
+          },
+          {
+            "id": "read_references",
+            "skill": "kbcli",
+            "kind": "validation",
+            "tool": "read_file",
+            "required": true
+          },
+          {
+            "id": "decision_main",
+            "skill": "kbcli",
+            "kind": "decision",
+            "required": true
+          },
+          {
+            "id": "node_sage",
+            "skill": "kbcli",
+            "kind": "tool",
+            "tool": "kbcli sage",
+            "required": true
+          },
+          {
+            "id": "output_sage",
+            "skill": "kbcli",
+            "kind": "output",
+            "required": true
+          },
+          {
+            "id": "path_kbcli",
+            "skill": "kbcli",
+            "kind": "output",
+            "required": true
+          }
+        ],
+        "tool_calls": [
+          "read_file",
+          "kbcli sage"
+        ],
+        "acknowledged_notices": [
+          "禁止跳过references凭记忆拼接命令",
+          "不得输出proj_id/scriptAnalysisId/scriptVersionId字段名或值"
+        ],
+        "output_type": "专家回答",
+        "output_text": "用户给到的剧本专家问答场景：故事围绕亲情的悲剧核心。结构从平和的除夕夜起笔铺陈，随后以一通深夜求救信号被错过为冲突点，最后以子女间关系的重新审视收束。三位主要人物以克制笔触凸显各自的精神底色：父亲的沉默源于少年丧父的创伤，母亲的隐忍是对家庭完整性的最后捍卫，子女的奔波外化为难以启齿的愧疚。"
+      }
+    },
+    {
+      "case_id": "kbcli-script-sage-wrong-branch",
+      "name": "剧本专家问答 - 走错分叉（误判为查数）",
+      "passed": false,
+      "expected": {
+        "path_id": "path_kbcli",
+        "nodes": [
+          "match_intent",
+          "read_references",
+          "decision_main",
+          "node_sage",
+          "output_sage",
+          "path_kbcli"
+        ],
+        "node_specs": [
+          {
+            "id": "match_intent",
+            "kind": "input",
+            "required": true
+          },
+          {
+            "id": "read_references",
+            "kind": "validation",
+            "required": true
+          },
+          {
+            "id": "decision_main",
+            "kind": "decision",
+            "required": true
+          },
+          {
+            "id": "node_sage",
+            "kind": "tool",
+            "tool": "kbcli sage",
+            "required": true
+          },
+          {
+            "id": "output_sage",
+            "kind": "output",
+            "required": true
+          }
+        ],
+        "expected_skills": [
+          {
+            "name": "kbcli",
+            "required": true
+          }
+        ],
+        "execution_chain": [
+          {
+            "id": "node_sage",
+            "kind": "tool",
+            "tool": "kbcli sage",
+            "required": true
+          }
+        ],
+        "notices": [
+          "查数与专家两条线互斥"
+        ],
+        "output_spec": {
+          "type": "专家回答",
+          "contains": [
+            "剧本"
+          ]
+        }
+      },
+      "actual": {
+        "case_id": "kbcli-script-sage-wrong-branch",
+        "run_id": "run-002-misroute",
+        "skill_version": "kbcli@2025-08-20",
+        "status": "wrong-branch",
+        "selected_skills": [
+          "kbcli"
+        ],
+        "actual_path": [
+          "match_intent",
+          "read_references",
+          "decision_main",
+          "node_recall",
+          "decision_search_mode",
+          "node_dsl_mode",
+          "check_capability",
+          "output_dsl",
+          "path_kbcli"
+        ],
+        "execution_chain": [
+          {
+            "id": "match_intent",
+            "skill": "kbcli",
+            "kind": "input",
+            "required": true
+          },
+          {
+            "id": "read_references",
+            "skill": "kbcli",
+            "kind": "validation",
+            "required": true
+          },
+          {
+            "id": "decision_main",
+            "skill": "kbcli",
+            "kind": "decision",
+            "required": true
+          },
+          {
+            "id": "node_recall",
+            "skill": "kbcli",
+            "kind": "tool",
+            "tool": "kbcli kb-recall",
+            "required": true
+          },
+          {
+            "id": "decision_search_mode",
+            "skill": "kbcli",
+            "kind": "decision",
+            "required": true
+          },
+          {
+            "id": "node_dsl_mode",
+            "skill": "kbcli",
+            "kind": "tool",
+            "tool": "kbcli kb-search",
+            "required": false
+          },
+          {
+            "id": "check_capability",
+            "skill": "kbcli",
+            "kind": "decision",
+            "required": true
+          },
+          {
+            "id": "output_dsl",
+            "skill": "kbcli",
+            "kind": "output",
+            "required": false
+          },
+          {
+            "id": "path_kbcli",
+            "skill": "kbcli",
+            "kind": "output",
+            "required": true
+          }
+        ],
+        "tool_calls": [
+          "kbcli kb-recall",
+          "kbcli kb-search"
+        ],
+        "output_type": "ID元数据",
+        "output_text": "返回项目ID元数据列表，未走 sage 专家分析。"
+      },
+      "failures": [
+        {
+          "code": "chain_step_missing",
+          "message": "完整执行链路缺少预期步骤",
+          "failed_node": "node_sage"
+        },
+        {
+          "code": "tool_missing",
+          "message": "执行链路要求的工具未被调用",
+          "failed_node": "node_sage"
+        },
+        {
+          "code": "notice_missed",
+          "message": "Skill 注意事项未被确认或遵守",
+          "failed_node": "查数与专家两条线互斥"
+        },
+        {
+          "code": "node_missing",
+          "message": "实际路径缺少预期节点",
+          "failed_node": "node_sage"
+        },
+        {
+          "code": "tool_missing",
+          "message": "节点要求的工具未被调用",
+          "failed_node": "node_sage"
+        },
+        {
+          "code": "node_missing",
+          "message": "实际路径缺少预期节点",
+          "failed_node": "output_sage"
+        },
+        {
+          "code": "output_type_mismatch",
+          "message": "最终输出类型不符合预期"
+        },
+        {
+          "code": "output_content_missing",
+          "message": "最终输出缺少预期内容",
+          "failed_node": "剧本"
+        }
+      ]
+    },
+    {
+      "case_id": "kbcli-sql-mode",
+      "name": "查数 → SQL 模式（电视剧播放指标）",
+      "passed": true,
+      "expected": {
+        "path_id": "path_kbcli",
+        "nodes": [
+          "match_intent",
+          "read_references",
+          "decision_main",
+          "node_recall",
+          "decision_search_mode",
+          "node_sql_mode",
+          "output_sql",
+          "path_kbcli"
+        ],
+        "node_specs": [
+          {
+            "id": "node_recall",
+            "kind": "tool",
+            "tool": "kbcli kb-recall",
+            "required": true
+          },
+          {
+            "id": "node_sql_mode",
+            "kind": "tool",
+            "tool": "kbcli kb-search",
+            "required": false
+          }
+        ],
+        "expected_skills": [
+          {
+            "name": "kbcli",
+            "required": true
+          }
+        ],
+        "execution_chain": [
+          {
+            "id": "node_recall",
+            "kind": "tool",
+            "tool": "kbcli kb-recall",
+            "required": true
+          },
+          {
+            "id": "node_sql_mode",
+            "kind": "tool",
+            "tool": "kbcli kb-search",
+            "required": true
+          }
+        ],
+        "output_spec": {
+          "type": "指标数据",
+          "contains": [
+            "播放量",
+            "收视率"
+          ]
+        }
+      },
+      "actual": {
+        "case_id": "kbcli-sql-mode",
+        "run_id": "run-004-sql-mode",
+        "skill_version": "kbcli@2025-08-20",
+        "status": "ok",
+        "selected_skills": [
+          "kbcli"
+        ],
+        "actual_path": [
+          "match_intent",
+          "read_references",
+          "decision_main",
+          "node_recall",
+          "decision_search_mode",
+          "node_sql_mode",
+          "output_sql",
+          "path_kbcli"
+        ],
+        "execution_chain": [
+          {
+            "id": "node_recall",
+            "skill": "kbcli",
+            "kind": "tool",
+            "tool": "kbcli kb-recall",
+            "required": true
+          },
+          {
+            "id": "node_sql_mode",
+            "skill": "kbcli",
+            "kind": "tool",
+            "tool": "kbcli kb-search",
+            "required": true
+          }
+        ],
+        "tool_calls": [
+          "kbcli kb-recall",
+          "kbcli kb-search"
+        ],
+        "output_type": "指标数据",
+        "output_text": "《逐玉》播出期间总播放量 12.3 亿，CSM 收视率均值 1.85%，连续 12 周位居同时段前三。"
+      }
+    }
+  ]
+}

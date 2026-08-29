@@ -1,0 +1,213 @@
+{
+  "path_id": "path_kbcli",
+  "name": "kbcli 完整路径",
+  "entry_conditions": [
+    "用户需要查询影视综数据、结构化ID或营销方案"
+  ],
+  "nodes": [
+    {
+      "id": "match_intent",
+      "kind": "input",
+      "condition": "激活 Skill 并解析用户意图",
+      "required": true,
+      "notes": [
+        "需要判断是查数场景还是专家问答"
+      ],
+      "next": [
+        "read_references"
+      ]
+    },
+    {
+      "id": "read_references",
+      "kind": "validation",
+      "condition": "必须先读取 references/kb-recall.md 和 references/sage.md",
+      "required": true,
+      "notes": [
+        "禁止跳过文档凭记忆拼接命令"
+      ],
+      "next": [
+        "decision_main"
+      ]
+    },
+    {
+      "id": "decision_main",
+      "kind": "decision",
+      "condition": "根据用户意图区分查数场景和专家问答",
+      "required": true,
+      "branches": [
+        {
+          "when": "用户要求查数（字段/指标/数据）",
+          "to": "node_recall",
+          "label": "查数分支",
+          "expect": {
+            "type": "数据结果",
+            "contains": [
+              "字段或指标"
+            ]
+          }
+        },
+        {
+          "when": "用户要求专家问答（@expert:market等）",
+          "to": "node_sage",
+          "label": "专家问答分支",
+          "expect": {
+            "type": "专家回答",
+            "contains": [
+              "分析或建议"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "node_recall",
+      "kind": "tool",
+      "tool": "kbcli kb-recall",
+      "condition": "所有查数场景第一步，调用 kb-recall 进行字段/指标范围召回",
+      "required": true,
+      "notes": [
+        "参数 --text 必填，--scope 可选"
+      ],
+      "next": [
+        "decision_search_mode"
+      ]
+    },
+    {
+      "id": "decision_search_mode",
+      "kind": "decision",
+      "condition": "根据召回结果判断使用 SQL 模式还是 DSL 模式",
+      "required": true,
+      "branches": [
+        {
+          "when": "需要电视剧播放指标取数（MySQL）",
+          "to": "node_sql_mode",
+          "label": "SQL模式分支",
+          "expect": {
+            "type": "指标数据",
+            "contains": [
+              "播放量",
+              "收视率"
+            ]
+          }
+        },
+        {
+          "when": "需要项目ID/剧集分类定位（ES）",
+          "to": "node_dsl_mode",
+          "label": "DSL模式分支",
+          "expect": {
+            "type": "元数据",
+            "contains": [
+              "项目ID",
+              "分类"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "node_sql_mode",
+      "kind": "tool",
+      "tool": "kbcli kb-search",
+      "condition": "使用 SQL 模式：--database 和 --sql 同时传",
+      "required": false,
+      "notes": [
+        "须同时传 --database 和 --sql，否则报 InvalidQuery"
+      ],
+      "next": [
+        "output_sql"
+      ]
+    },
+    {
+      "id": "node_dsl_mode",
+      "kind": "tool",
+      "tool": "kbcli kb-search",
+      "condition": "使用 DSL 模式：--query 传 SELECT 字段 WHERE 条件",
+      "required": false,
+      "notes": [
+        "值必须带引号，只支持 = / IN，用 AND 连接"
+      ],
+      "next": [
+        "check_capability"
+      ]
+    },
+    {
+      "id": "check_capability",
+      "kind": "decision",
+      "condition": "判断 DSL 模式是否能表达需求，否则需 MCP 兜底",
+      "required": true,
+      "notes": [
+        "DSL 不支持 range、rank、exact、并行多库"
+      ],
+      "branches": [
+        {
+          "when": "需要 range/rank/exact/多库等能力",
+          "to": "node_mcp_fallback",
+          "label": "MCP兜底分支",
+          "expect": {
+            "type": "复杂查询结果",
+            "contains": [
+              "精确匹配",
+              "排序"
+            ]
+          }
+        },
+        {
+          "when": "仅需简单查询（项目ID）",
+          "to": "output_dsl",
+          "label": "简单查询分支",
+          "expect": {
+            "type": "ID元数据",
+            "contains": [
+              "项目ID"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "node_mcp_fallback",
+      "kind": "tool",
+      "tool": "kb_search",
+      "condition": "使用 MCP 调用 szabot_tools.kb_search 进行复杂查询",
+      "required": false,
+      "notes": [
+        "适用于 DSL 无法表达的区间/排序/精确匹配"
+      ],
+      "next": [
+        "output_dsl"
+      ]
+    },
+    {
+      "id": "node_sage",
+      "kind": "tool",
+      "tool": "sage",
+      "condition": "专家问答场景，调用 sage ask 命令",
+      "required": false,
+      "notes": [
+        "使用 --agent-id 和 --text 参数"
+      ],
+      "next": [
+        "output_sage"
+      ]
+    },
+    {
+      "id": "output_sql",
+      "kind": "output",
+      "condition": "输出 SQL 模式查询结果",
+      "required": true
+    },
+    {
+      "id": "output_dsl",
+      "kind": "output",
+      "condition": "输出 DSL 或 MCP 查询结果",
+      "required": false
+    },
+    {
+      "id": "output_sage",
+      "kind": "output",
+      "condition": "输出专家回答",
+      "required": false
+    }
+  ],
+  "exit": "output_sql"
+}

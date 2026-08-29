@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# kbcli —— 影库 CLI 的 MOCK 实现（仅用于本地/沙盒内跑通 szabot 的 agent loop）
+#
+# ⚠️ 这是一个假的 kbcli：它不连接任何真实后端，而是按照 skills/kbcli 文档
+#    约定的输出格式，本地伪造 SSE 事件流与最终结果。目的是让整条链路
+#    （读 skill → 意图识别 → 执行 bash 里的 kbcli → 拿到 <text> → 总结）
+#    在有 Docker 的机器上真实闭环，便于验证 szabot 的工具执行通道。
+#
+# 支持子命令：
+#   kbcli sage ask   --agent-id=<id> [--thread-id <tid>] --text <text>
+#   kbcli kb-recall  --text <text> [--scope <path>]...
+#   kbcli kb-search  --query "SELECT ... [WHERE ...]"
+#   kbcli kb-search  --database <db> --sql <SQL>            (SQL 模式)
+#
+# 输出约定（与 skill 文档一致）：
+#   - sage ask：先把 SSE 事件逐行打到 stderr（便于观察链路），
+#               最终把 <thread_id>...</thread_id><text>...</text> 打到 stdout。
+#   - kb-recall / kb-search：把结果包在 <text>...</text> 内打到 stdout。
+# ---------------------------------------------------------------------------
+
+set -euo pipefail
+
+# ---- 小工具：生成一个稳定可读的伪 thread id ----------------------------------
+gen_thread_id() {
+  # 优先用 /proc 里的随机源，缺失时退化到 date+RANDOM
+  local rnd
+  if [[ -r /dev/urandom ]]; then
+    rnd="$(head -c6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  else
+    rnd="$(printf '%x%x' "$RANDOM" "$RANDOM")"
+  fi
+  printf 'th_%s' "$rnd"
+}
+
+# ---- SSE 事件打印（打到 stderr，不污染 stdout 的最终结果）----------------------
+emit() { # emit <event> <data>
+  printf 'event: %s\n' "$1" >&2
+  printf 'data: %s\n\n' "$2" >&2
+}
+heartbeat() { printf ': keep-alive\n\n' >&2; }
+
+# ---- 参数解析：把 --key value / --key=value 统一收进关联数组 -------------------
+declare -A OPT
+parse_opts() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --*=*)
+        local kv="${1#--}"
+        OPT["${kv%%=*}"]="${kv#*=}"
+        shift
+        ;;
+      --*)
+        local key="${1#--}"
+        # --scope 可重复：累积到 OPT[scope] 里用 | 分隔
+        if [[ "${2:-}" == --* || $# -lt 2 ]]; then
+          OPT["$key"]="true"; shift
+        else
+          if [[ -n "${OPT[$key]:-}" ]]; then
+            OPT["$key"]="${OPT[$key]}|$2"
+          else
+            OPT["$key"]="$2"
+          fi
+          shift 2
+        fi
+        ;;
+      *) shift ;;
+    esac
+  done
+}
+
+# ===========================================================================
+# 子命令：sage ask —— 专家问答（模拟 SSE 全链路）
+# ===========================================================================
+cmd_sage_ask() {
+  parse_opts "$@"
+  local agent_id="${OPT[agent-id]:-unknown_agent}"
+  local text="${OPT[text]:-}"
+  local thread_id="${OPT[thread-id]:-}"
+
+  if [[ -z "$text" ]]; then
+    printf '<error>missing --text</error>\n'
+    exit 2
+  fi
+
+  # 首轮无 thread-id → 新建会话并下发；续轮沿用传入的
+  local is_new="false"
+  if [[ -z "$thread_id" ]]; then
+    thread_id="$(gen_thread_id)"
+    is_new="true"
+  fi
+
+  # --- 伪造 SSE 事件流（stderr）---
+  if [[ "$is_new" == "true" ]]; then
+    emit "session.created" "{\"thread_id\":\"$thread_id\",\"agent_id\":\"$agent_id\"}"
+  fi
+  emit "agent.status" "{\"stage\":\"running\",\"message\":\"$agent_id 已接入，正在解析输入\"}"
+  emit "tool.call"    "{\"tool\":\"expert_fetch\",\"args\":{\"input\":\"$text\"}}"
+  sleep 1
+  emit "tool.result"  "{\"status\":\"ok\",\"summary\":\"已加载引用内容\"}"
+  heartbeat
+  emit "agent.status" "{\"stage\":\"analyzing\",\"message\":\"生成结论中\"}"
+  emit "message.delta" "{\"delta\":\"（模拟）正在分析：$text\"}"
+  sleep 1
+  emit "message.completed" "{\"finish_reason\":\"stop\"}"
+
+  # --- 按 agent-id 给出不同风格的模拟正文 ---
+  local body
+  case "$agent_id" in
+    novel_agent)
+      body="该作品为都市悬疑叠加家庭情感的复合题材，主线围绕一桩悬案交叉叙事，反转密集、节奏紧凑，适合改编为 24 集精品短剧集。改编潜力集中于三点：开篇强悬念钩子利于短视频切片传播；原生家庭创伤议题共情面广、话题度高；都市实景与案件推理具备较强可视化与视听张力。主要风险在于多线叙事影视化时的取舍与关键反转的合理性铺垫，建议在剧本阶段收敛支线、强化因果链。整体商业与口碑潜力评级：B+。"
+      ;;
+    market_expert_agent)
+      body="营销切入建议：以强悬念短视频切条打开传播面，配合原生家庭话题制造社交讨论，分平台投放。核心卖点提炼为悬念钩子、情感共鸣与实景质感三条主轴，节点上覆盖开播前预热、开播期口碑发酵、收官期长尾话题。风险为题材同质化，需以差异化人设与名场面切片建立记忆点。"
+      ;;
+    variety_expert_agent)
+      body="模式分析：该综艺属竞技+情感观察复合模式，赛制以晋级淘汰驱动张力，本土化需强化嘉宾关系线与话题设计。选题建议聚焦代际沟通与职场议题，风险在赛制复杂度与嘉宾产能，建议精简赛制、强化真人秀真实感。"
+      ;;
+    script_expert_agent)
+      body="剧本分析：结构完整、幕次清晰，人物弧光在中段略显平缓，建议强化第二幕冲突升级与反派动机铺陈。台词密度适中，情感高点集中于结尾，可前置一处情感锚点提升黏性。整体可拍性良好。"
+      ;;
+    *)
+      body="（模拟）已完成对输入的分析，返回要点摘要。输入内容：$text"
+      ;;
+  esac
+
+  emit "result" "{\"thread_id\":\"$thread_id\"}"
+  emit "done" "[DONE]"
+
+  # --- 最终结果打到 stdout（供 agent 解析 <text>）---
+  printf '<thread_id>%s</thread_id><text>%s</text>\n' "$thread_id" "$body"
+}
+
+# ===========================================================================
+# 子命令：kb-recall —— 字段范围召回（模拟返回 <text> 段）
+# ===========================================================================
+cmd_kb_recall() {
+  parse_opts "$@"
+  local text="${OPT[text]:-}"
+  local scope="${OPT[scope]:-}"
+
+  if [[ -z "$text" ]]; then
+    printf '<error>missing --text</error>\n'
+    exit 2
+  fi
+
+  # 无 scope 时模拟返回 catalog（中间态）；有 scope 时返回 text（字段段）
+  if [[ -z "$scope" ]]; then
+    cat <<'EOF'
+<catalog>
+| # | description |
+|---|--------|
+| /影库知识库 | 知识库说明 |
+| /影库知识库/电视剧 | 电视剧分类 |
+| /影库知识库/电视剧/项目信息/项目基础信息 | 项目基础信息标签 |
+</catalog>
+EOF
+    exit 0
+  fi
+
+  cat <<EOF
+<text>
+召回结果（模拟）：与"$text"相关的元数据字段如下（scope=$scope）。
+
+domain_knowledge: 影库知识库-ES-0
+
+| 字段中文名 | 字段别名 | 字段简述 | 字段参数类别 | 字段枚举值 |
+|---|---|---|---|---|
+| 项目名称 | 片名、剧名 | 项目的中文名称 | condition, target | - |
+| 剧集分类 | - | 项目所属分类 | condition, target | 电视剧、短剧 |
+| 项目ID | - | 项目唯一标识 | condition, target | - |
+</text>
+EOF
+}
+
+# ===========================================================================
+# 子命令：kb-search —— 两种互斥模式（DSL --query / SQL --database+--sql）
+# ===========================================================================
+cmd_kb_search() {
+  parse_opts "$@"
+  local query="${OPT[query]:-}"
+  local database="${OPT[database]:-}"
+  local sql="${OPT[sql]:-}"
+
+  local has_query="false"; [[ -n "$query" ]] && has_query="true"
+  local has_sql="false";   [[ -n "$database" || -n "$sql" ]] && has_sql="true"
+
+  # 两模式互斥：同传或都不传都报 InvalidQuery
+  if [[ "$has_query" == "true" && "$has_sql" == "true" ]]; then
+    printf '<error>InvalidQuery: --query 与 --database/--sql 互斥，不可同时传</error>\n'; exit 2
+  fi
+  if [[ "$has_query" == "false" && "$has_sql" == "false" ]]; then
+    printf '<error>InvalidQuery: 必须传 --query 或 --database+--sql 之一</error>\n'; exit 2
+  fi
+
+  if [[ "$has_query" == "true" ]]; then
+    # DSL 模式：查元数据
+    cat <<EOF
+<text>
+kb-search DSL 模式（模拟）query=$query
+
+| 项目ID | 项目名称 | 剧集分类 |
+|---|---|---|
+| 171 | 示例剧A | 电视剧 |
+| 208 | 示例剧B | 电视剧 |
+</text>
+EOF
+  else
+    # SQL 模式：取指标
+    if [[ -z "$database" || -z "$sql" ]]; then
+      printf '<error>InvalidQuery: SQL 模式必须同时传 --database 与 --sql</error>\n'; exit 2
+    fi
+    cat <<EOF
+<text>
+kb-search SQL 模式（模拟）database=$database
+SQL: $sql
+
+| dt | vv | uv |
+|---|---|---|
+| 2026-08-15 | 12030000 | 4210000 |
+| 2026-08-16 | 13850000 | 4680000 |
+</text>
+EOF
+  fi
+}
+
+# ===========================================================================
+# 入口分发
+# ===========================================================================
+main() {
+  if [[ $# -eq 0 ]]; then
+    printf '<error>usage: kbcli <sage|kb-recall|kb-search> ...</error>\n'; exit 2
+  fi
+  local sub="$1"; shift
+  case "$sub" in
+    sage)
+      local action="${1:-}"; shift || true
+      case "$action" in
+        ask) cmd_sage_ask "$@" ;;
+        *) printf '<error>unknown sage action: %s</error>\n' "$action"; exit 2 ;;
+      esac
+      ;;
+    kb-recall) cmd_kb_recall "$@" ;;
+    kb-search) cmd_kb_search "$@" ;;
+    *) printf '<error>unknown subcommand: %s</error>\n' "$sub"; exit 2 ;;
+  esac
+}
+
+main "$@"

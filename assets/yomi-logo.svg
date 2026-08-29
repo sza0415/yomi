@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 220" role="img" aria-labelledby="title desc">
+  <title id="title">yomi logo</title>
+  <desc id="desc">A friendly cartoon sloth followed by the yomi wordmark.</desc>
+  <defs>
+    <linearGradient id="slothFace" x1="0" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#fffdf8"/>
+      <stop offset="0.55" stop-color="#f7d9c8"/>
+      <stop offset="1" stop-color="#c9f0e4"/>
+    </linearGradient>
+    <linearGradient id="slothArm" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fffefa"/>
+      <stop offset="1" stop-color="#d8e8e4"/>
+    </linearGradient>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="5" stdDeviation="5" flood-color="#000" flood-opacity=".28"/>
+    </filter>
+  </defs>
+  <g transform="translate(38 31) scale(.84)">
+    <rect width="220" height="190" rx="34" fill="#2f3034"/>
+    <circle cx="184" cy="28" r="10" fill="#fff" opacity=".95"/>
+    <path d="M42 86c-9-31 7-59 30-59 12 0 22 7 29 18 8-4 17-6 28-6s20 2 28 6c7-11 17-18 29-18 23 0 39 28 30 59 8 12 11 25 11 38 0 34-44 54-98 54S31 158 31 124c0-13 3-26 11-38Z" fill="url(#slothFace)" filter="url(#softShadow)"/>
+    <ellipse cx="80" cy="99" rx="22" ry="28" fill="#34353a"/>
+    <ellipse cx="140" cy="99" rx="22" ry="28" fill="#34353a"/>
+    <ellipse cx="80" cy="99" rx="7" ry="10" fill="#fff" opacity=".94"/>
+    <ellipse cx="140" cy="99" rx="7" ry="10" fill="#fff" opacity=".94"/>
+    <circle cx="80" cy="101" r="3.5" fill="#34353a"/>
+    <circle cx="140" cy="101" r="3.5" fill="#34353a"/>
+    <path d="M104 116q6-6 12 0l-2 10q-4 4-8 0Z" fill="#34353a"/>
+    <path d="M105 138q7 6 14 0" fill="none" stroke="#34353a" stroke-width="4" stroke-linecap="round"/>
+    <ellipse cx="67" cy="171" rx="13" ry="22" fill="url(#slothArm)" filter="url(#softShadow)"/>
+    <ellipse cx="94" cy="178" rx="13" ry="24" fill="url(#slothArm)" filter="url(#softShadow)"/>
+    <ellipse cx="122" cy="178" rx="13" ry="24" fill="url(#slothArm)" filter="url(#softShadow)"/>
+    <ellipse cx="149" cy="171" rx="13" ry="22" fill="url(#slothArm)" filter="url(#softShadow)"/>
+    <path d="M33 151l-10 9 13 1 7 11 3-14 12-7-14-2-6-11Z" fill="#fff"/>
+    <path d="M35 43q15-17 30-11M155 32q15-6 30 11" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".65"/>
+  </g>
+  <text x="275" y="145" fill="#5548d8" font-family="Nunito, Quicksand, Arial Rounded MT Bold, sans-serif" font-size="112" font-weight="700" letter-spacing="1">yomi</text>
+</svg>

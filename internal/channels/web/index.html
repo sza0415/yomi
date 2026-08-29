@@ -1,0 +1,1033 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>szabot</title>
+<style>
+  :root {
+    --bg: #0b0e13;
+    --panel: #11151c;
+    --panel-2: #181e27;
+    --panel-3: #202833;
+    --border: #29313d;
+    --border-soft: #202732;
+    --text: #edf1f7;
+    --muted: #8e9aaa;
+    --subtle: #667181;
+    --accent: #6d8dff;
+    --accent-soft: rgba(109, 141, 255, .14);
+    --green: #5dd39e;
+    --orange: #f0a451;
+    --purple: #c18bea;
+    --user-bubble: #3656be;
+    --bot-bubble: #181e27;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    height: 58px;
+    padding: 0 22px;
+    border-bottom: 1px solid var(--border-soft);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(17, 21, 28, .96);
+  }
+  header .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); box-shadow: 0 0 10px rgba(93, 211, 158, .75);
+  }
+  header .dot.off { background: #d0603a; box-shadow: none; }
+  header h1 { font-size: 14px; font-weight: 650; letter-spacing: .01em; margin: 0; }
+  header .status { font-size: 12px; color: var(--muted); margin-left: auto; }
+  .view-tabs { display: flex; gap: 2px; margin-left: 22px; padding: 3px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--bg); }
+  .view-tab {
+    height: 28px;
+    padding: 0 13px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color .15s, background .15s;
+  }
+  .view-tab:hover { color: var(--text); }
+  .view-tab.active { background: var(--accent-soft); border-color: rgba(109, 141, 255, .3); color: #b8c7ff; }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 32px 0 42px;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 0 24px; }
+
+  .msg { display: flex; margin-bottom: 20px; }
+  .msg.user { justify-content: flex-end; }
+  .bubble {
+    max-width: 78%;
+    padding: 12px 15px;
+    border-radius: 12px;
+    line-height: 1.55;
+    font-size: 14px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .msg.user .bubble {
+    background: var(--user-bubble);
+    color: #fff;
+    border-bottom-right-radius: 5px;
+    box-shadow: 0 5px 18px rgba(0, 0, 0, .14);
+  }
+  .msg.bot .bubble {
+    background: var(--bot-bubble);
+    border: 1px solid var(--border);
+    border-bottom-left-radius: 5px;
+  }
+  .msg.reasoning .bubble {
+    color: #aeb7c6;
+    background: rgba(24, 30, 39, .56);
+    border: 1px solid var(--border-soft);
+    font-size: 13px;
+  }
+  .msg.tool .bubble {
+    color: #a9d7e8;
+    background: #17252c;
+    border-color: #244653;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+  }
+  .collapsible {
+    max-width: 76%;
+    min-width: 0;
+  }
+  .collapsible summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 12px;
+    user-select: none;
+    padding: 9px 12px;
+    list-style-position: inside;
+  }
+  .collapsible summary::marker { color: var(--accent); }
+  .collapsible .bubble {
+    max-width: none;
+    margin-top: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 10px 10px;
+  }
+  .msg.reasoning .collapsible {
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: rgba(17, 21, 28, .32);
+  }
+  .msg.tool .collapsible {
+    border: 1px solid #244653;
+    border-radius: 9px;
+    background: rgba(28, 47, 49, .7);
+  }
+  .msg.tool .collapsible summary { color: #a9d7e8; }
+  /* 提问卡片：醒目区分于普通回复，提示用户"需要你来回答"。 */
+  .msg.question .bubble {
+    background: rgba(42, 32, 62, .72);
+    border: 1px solid #5d4b91;
+    border-left: 3px solid var(--accent);
+    color: var(--text);
+  }
+  .msg.question .role { color: var(--accent); }
+  .options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .option-btn {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 7px 14px;
+    font-size: 13.5px;
+    font-weight: 500;
+    cursor: pointer;
+    height: auto;
+    transition: background 0.15s;
+  }
+  .option-btn:hover { background: var(--accent); color: #fff; }
+  .option-btn:disabled { opacity: 0.45; cursor: default; border-color: var(--border); }
+  .role {
+    font-size: 11px; color: var(--muted);
+    margin: 0 4px 4px; align-self: flex-end;
+  }
+  .msg.bot .role { align-self: flex-start; }
+  .bubble.pending::after {
+    content: "▋";
+    animation: blink 1s steps(2) infinite;
+    color: var(--muted);
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  footer {
+    border-top: 1px solid var(--border-soft);
+    background: rgba(17, 21, 28, .96);
+    padding: 16px 0 13px;
+  }
+  .composer {
+    max-width: 820px; margin: 0 auto; padding: 0 24px;
+    display: flex; gap: 10px; align-items: flex-end;
+  }
+  textarea {
+    flex: 1;
+    resize: none;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 14.5px;
+    font-family: inherit;
+    line-height: 1.5;
+    max-height: 160px;
+    outline: none;
+  }
+  textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 9px;
+    padding: 11px 19px;
+    font-size: 14.5px;
+    font-weight: 600;
+    cursor: pointer;
+    height: 44px;
+  }
+  button.cancel-button { background: #9b4d4d; }
+  button.cancel-button:hover { background: #b85b5b; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .hint { text-align: center; color: var(--subtle); font-size: 11px; margin-top: 8px; }
+  #traceView { display: none; flex: 1; flex-direction: column; min-height: 0; }
+  .trace-toolbar {
+    display: flex; align-items: center; gap: 10px; padding: 12px 22px;
+    border-bottom: 1px solid var(--border-soft); background: var(--panel);
+  }
+  .trace-toolbar select {
+    min-width: 260px; max-width: 520px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px;
+  }
+  .trace-status { color: var(--muted); font-size: 12px; }
+  .trace-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 38%); height: calc(100% - 55px); min-height: 0; }
+  .trace-list { overflow: auto; padding: 22px 24px 48px; background: var(--bg); }
+  .trace-overview { border: 1px solid var(--border-soft); background: var(--panel); border-radius: 10px; padding: 13px 14px; margin-bottom: 24px; box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
+  .trace-lane { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; align-items: center; min-height: 28px; }
+  .trace-lane + .trace-lane { margin-top: 4px; }
+  .lane-label { color: var(--subtle); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+  .lane-track { position: relative; min-width: 0; height: 10px; border-radius: 3px; background: var(--border-soft); }
+  .lane-block { position: absolute; top: 0; min-width: 6px; height: 10px; border: 0; border-radius: 3px; padding: 0; background: var(--accent); opacity: .82; cursor: pointer; }
+  .lane-block:hover, .lane-block.selected { opacity: 1; outline: 2px solid var(--text); outline-offset: 1px; }
+  .lane-block.model { background: var(--purple); }
+  .lane-block.tool { background: var(--orange); }
+  .trace-node { width: 100%; display: grid; grid-template-columns: 112px minmax(0, 1fr) 82px; gap: 10px; align-items: center; text-align: left; background: transparent; color: var(--text); border: 0; border-top: 1px solid var(--border-soft); border-radius: 0; height: auto; min-height: 46px; padding: 10px; font-size: 12px; font-weight: 400; cursor: pointer; transition: background .15s, padding-left .15s; }
+  .trace-node:hover, .trace-node.selected { background: var(--panel-2); }
+  .trace-node.selected { box-shadow: inset 3px 0 0 var(--accent); padding-left: 13px; }
+  .trace-step-group { margin: 14px 0 18px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--panel); overflow: hidden; }
+  .trace-step-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 12px; color: var(--text); background: var(--panel-2); border-bottom: 1px solid var(--border-soft); font-size: 12px; font-weight: 700; }
+  .trace-step-heading small { color: var(--muted); font-size: 11px; font-weight: 400; }
+  .trace-step-group .trace-node { border-top: 0; border-bottom: 1px solid var(--border-soft); }
+  .trace-step-group .trace-node:last-child { border-bottom: 0; }
+  .trace-node .node-type { font-weight: 700; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: .02em; }
+  .trace-node.run .node-type { color: var(--muted); }
+  .trace-node.tool .node-type { color: #e99b2f; }
+  .trace-node.assistant .node-type { color: #b184e8; }
+  .trace-node .node-summary { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .trace-node .node-time { color: var(--muted); text-align: right; font-size: 11px; }
+  .trace-run { margin-bottom: 18px; }
+  .run-summary { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 10px 8px 14px; border-bottom: 1px solid var(--border-soft); color: var(--muted); font-size: 11px; }
+  .run-summary strong { color: var(--text); font-weight: 600; }
+  .trace-run-title { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; padding: 0 8px 8px; }
+  .trace-event {
+    width: 100%; display: grid; grid-template-columns: 118px minmax(0, 1fr) 82px; gap: 10px;
+    align-items: center; text-align: left; background: transparent; color: var(--text);
+    border: 0; border-top: 1px solid var(--border); border-radius: 0; height: auto; min-height: 42px;
+    padding: 8px; font-size: 12px; font-weight: 400;
+  }
+  .trace-event:hover, .trace-event.selected { background: var(--panel-2); }
+  .trace-event .event-type { font-weight: 600; color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .trace-event.tool .event-type { color: #e99b2f; }
+  .trace-event .event-summary { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .trace-event .event-time { color: var(--muted); text-align: right; font-size: 11px; }
+  .trace-empty { color: var(--muted); text-align: center; padding: 70px 20px; }
+  .trace-detail { border-left: 1px solid var(--border); overflow: auto; background: var(--panel); padding: 24px 24px 44px; }
+  .detail-kicker { color: var(--orange); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+  .detail-title { margin: 6px 0 22px; font-size: 18px; letter-spacing: -.01em; }
+  .detail-grid { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 11px; font-size: 12px; padding: 14px 0; border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); }
+  .detail-grid dt { color: var(--muted); }
+  .detail-grid dd { margin: 0; overflow-wrap: anywhere; }
+  .detail-section { margin-top: 24px; }
+  .detail-section h3 { color: var(--muted); font-size: 11px; font-weight: 600; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .08em; }
+  .detail-section details { border-top: 1px solid var(--border-soft); padding: 10px 0; }
+  .detail-section details:first-of-type { border-top: 0; }
+  .detail-section summary { cursor: pointer; color: var(--text); font-size: 12px; }
+  .detail-code { margin: 0; padding: 13px; overflow: auto; background: var(--bg); border: 1px solid var(--border-soft); border-radius: 8px; color: #c8d1e6; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+  @media (max-width: 760px) {
+    .trace-layout { grid-template-columns: 1fr; height: auto; overflow: auto; }
+    .trace-detail { border-left: 0; border-top: 1px solid var(--border); min-height: 320px; }
+    .trace-list { padding: 18px 16px 36px; }
+    .trace-toolbar { padding: 10px 16px; }
+    .trace-toolbar label { display: none; }
+    .wrap, .composer { padding-left: 16px; padding-right: 16px; }
+    .trace-toolbar select { min-width: 0; flex: 1; }
+    .trace-node { grid-template-columns: 94px minmax(0, 1fr); }
+    .trace-node .node-time { display: none; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <span class="dot" id="statusDot"></span>
+    <h1>szabot</h1>
+    <div class="view-tabs">
+      <button class="view-tab active" id="chatTab">聊天</button>
+      <button class="view-tab" id="traceTab">Trace</button>
+    </div>
+    <span class="status" id="status">连接中…</span>
+  </header>
+
+  <div id="messages"><div class="wrap" id="list"></div></div>
+
+  <main id="traceView">
+    <div class="trace-toolbar">
+      <label for="runSelect">Run</label>
+      <select id="runSelect"><option value="">选择一次运行</option></select>
+      <label for="runStatusFilter">状态</label>
+      <select id="runStatusFilter">
+        <option value="">全部</option>
+        <option value="running">running</option>
+        <option value="waiting_user">waiting_user</option>
+        <option value="completed">completed</option>
+        <option value="failed">failed</option>
+        <option value="cancelled">cancelled</option>
+        <option value="timed_out">timed_out</option>
+        <option value="budget_exceeded">budget_exceeded</option>
+      </select>
+      <button id="refreshTrace" title="刷新 Trace">刷新</button>
+      <span class="trace-status" id="traceStatus"></span>
+    </div>
+    <div class="trace-layout">
+      <section class="trace-list" id="traceList"><div class="trace-empty">选择 Trace 查看执行轨迹</div></section>
+      <aside class="trace-detail" id="traceDetail"><div class="trace-empty">点击左侧事件查看详情</div></aside>
+    </div>
+  </main>
+
+  <footer>
+    <div class="composer">
+      <textarea id="input" rows="1" placeholder="给 szabot 发消息…"></textarea>
+      <button id="send">发送</button>
+      <button id="cancel" class="cancel-button" disabled>取消</button>
+    </div>
+    <div class="hint">点击“发送”提交消息</div>
+  </footer>
+
+<script>
+(function () {
+  const list = document.getElementById("list");
+  const messages = document.getElementById("messages");
+  const input = document.getElementById("input");
+  const sendBtn = document.getElementById("send");
+  const cancelBtn = document.getElementById("cancel");
+  const statusEl = document.getElementById("status");
+  const statusDot = document.getElementById("statusDot");
+  const messagesView = document.getElementById("messages");
+  const composer = document.querySelector("footer");
+  const traceView = document.getElementById("traceView");
+  const chatTab = document.getElementById("chatTab");
+  const traceTab = document.getElementById("traceTab");
+  const runSelect = document.getElementById("runSelect");
+  const runStatusFilter = document.getElementById("runStatusFilter");
+  const traceList = document.getElementById("traceList");
+  const traceDetail = document.getElementById("traceDetail");
+  const traceStatus = document.getElementById("traceStatus");
+  const refreshTrace = document.getElementById("refreshTrace");
+
+  // 会话 ID：优先用 localStorage 里保存的，保证刷新后延续同一 session。
+  let session = localStorage.getItem("szabot_session");
+  if (!session) {
+    session = "web:" + Date.now() + ":" + Math.random().toString(36).slice(2, 8);
+    localStorage.setItem("szabot_session", session);
+  }
+
+  let waiting = false;         // 是否在等待回复（禁用发送）
+  let answering = false;       // 是否处于"回答 agent 提问"模式
+  let activeRun = false;       // 当前 session 是否有一个可由用户取消的 Run
+  let activeOptionBtns = [];   // 当前问题的选项按钮，回答后统一禁用
+  let traceRuns = [];
+  let traceEvents = [];
+
+  function switchView(view) {
+    const trace = view === "trace";
+    messagesView.style.display = trace ? "none" : "block";
+    composer.style.display = trace ? "none" : "block";
+    traceView.style.display = trace ? "flex" : "none";
+    chatTab.classList.toggle("active", !trace);
+    traceTab.classList.toggle("active", trace);
+    if (trace) loadTraceRuns();
+  }
+
+  function setStatus(text, online) {
+    statusEl.textContent = text;
+    statusDot.classList.toggle("off", !online);
+  }
+
+  function scrollToBottom() {
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function addMessage(role, text, label) {
+    const msg = document.createElement("div");
+    msg.className = "msg " + role;
+    const roleEl = document.createElement("div");
+    roleEl.className = "role";
+    roleEl.textContent = label || (role === "user" ? "你" : "szabot");
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.textContent = text;
+    if (role === "user") {
+      msg.appendChild(bubble);
+    } else {
+      msg.appendChild(roleEl);
+      msg.appendChild(bubble);
+    }
+    list.appendChild(msg);
+    scrollToBottom();
+    return bubble;
+  }
+
+  function addCollapsibleMessage(role, text, label) {
+    const msg = document.createElement("div");
+    msg.className = "msg " + role;
+    const details = document.createElement("details");
+    details.className = "collapsible";
+    const summary = document.createElement("summary");
+    summary.textContent = label;
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.textContent = text;
+    details.appendChild(summary);
+    details.appendChild(bubble);
+    msg.appendChild(details);
+    list.appendChild(msg);
+    scrollToBottom();
+    return bubble;
+  }
+
+  // clearPending 收尾所有"进行中"的流式气泡（去掉光标），用于本轮结束或
+  // 插入提问卡片时。
+  function clearPending() {
+    Object.keys(textMessages).forEach(function (id) {
+      textMessages[id].classList.remove("pending");
+      delete textMessages[id];
+    });
+    Object.keys(reasoningMessages).forEach(function (id) {
+      reasoningMessages[id].classList.remove("pending");
+      delete reasoningMessages[id];
+    });
+  }
+
+  function finishResponse() {
+    clearPending();
+    waiting = false;
+    activeRun = false;
+    sendBtn.disabled = false;
+    cancelBtn.disabled = true;
+  }
+
+  // showQuestion 渲染 agent 的提问：一张醒目卡片 + 可选项按钮。
+  // 关键：它会立即解禁输入框并聚焦，因为提问期间本轮不会发 RUN_FINISHED ——
+  // 工具正阻塞等待回答，用户必须能马上输入/点击来回答。
+  function showQuestion(text, options) {
+    // 结束当前正在流式的正文/推理气泡，让问题独立成块。
+    clearPending();
+
+    const bubble = addMessage("question", text, "需要你的回答");
+
+    activeOptionBtns = [];
+    if (options && options.length) {
+      const box = document.createElement("div");
+      box.className = "options";
+      options.forEach(function (opt) {
+        const btn = document.createElement("button");
+        btn.className = "option-btn";
+        btn.textContent = opt;
+        btn.addEventListener("click", function () {
+          if (!answering) return;
+          answerQuestion(opt);
+        });
+        box.appendChild(btn);
+        activeOptionBtns.push(btn);
+      });
+      bubble.appendChild(box);
+    }
+
+    // 进入回答模式：解禁输入，聚焦，等用户输入或点选项。
+    answering = true;
+    waiting = false;
+    activeRun = true;
+    sendBtn.disabled = false;
+    cancelBtn.disabled = false;
+    input.disabled = false;
+    input.placeholder = "输入你的回答…";
+    input.focus();
+    scrollToBottom();
+  }
+
+  // answerQuestion 把用户的回答（打字或点按钮）作为一条普通消息发出去，
+  // 并把选项按钮全部禁用，避免重复点击。
+  function answerQuestion(text) {
+    answering = false;
+    activeOptionBtns.forEach(function (b) { b.disabled = true; });
+    activeOptionBtns = [];
+    input.placeholder = "给 szabot 发消息…";
+    doSend(text);
+  }
+
+  async function cancelTask() {
+    if (!activeRun) return;
+    cancelBtn.disabled = true;
+    try {
+      const resp = await fetch("/api/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session: session }),
+      });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      clearPending();
+      waiting = false;
+      answering = false;
+      activeRun = false;
+      sendBtn.disabled = false;
+      input.placeholder = "给 szabot 发消息…";
+      addMessage("bot", "任务已取消");
+    } catch (err) {
+      cancelBtn.disabled = false;
+      addMessage("bot", "取消失败：" + err.message);
+    }
+  }
+
+  const traceLabels = {
+    "run.queued": "RUN QUEUED",
+    "run.started": "RUN STARTED",
+    "run.status.changed": "RUN STATUS",
+    "run.finished": "RUN FINISHED",
+    "input.received": "INPUT",
+    "system.message": "SYSTEM",
+    "context.injected": "CONTEXT",
+    "context.compacted": "CONTEXT COMPACTED",
+    "model.request.started": "MODEL REQUEST",
+    "model.response.finished": "MODEL RESPONSE",
+    "model.request.failed": "MODEL FAILED",
+    "model.status.changed": "MODEL STATUS",
+    "assistant.message.completed": "ASSISTANT",
+    "tool.execution.started": "TOOL START",
+    "tool.execution.finished": "TOOL RESULT",
+    "tool.execution.failed": "TOOL FAILED",
+    "tool.status.changed": "TOOL STATUS",
+    "user.question.asked": "QUESTION",
+    "user.question.answered": "ANSWER",
+  };
+
+  function traceLabel(type) { return traceLabels[type] || type.toUpperCase(); }
+
+  function traceTime(value) {
+    if (!value) return "";
+    return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+
+  function eventMillis(event) {
+    const time = event && Date.parse(event.timestamp);
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  function nodeDuration(node) {
+    const first = node.events[0];
+    const last = node.events[node.events.length - 1];
+    const explicit = Number(last && last.duration_ms);
+    if (Number.isFinite(explicit) && explicit > 0) return explicit;
+    const elapsed = eventMillis(last) - eventMillis(first);
+    return elapsed > 0 ? elapsed : 1;
+  }
+
+  function formatDuration(milliseconds) {
+    if (!milliseconds || milliseconds < 1) return "0 ms";
+    if (milliseconds < 1000) return Math.round(milliseconds) + " ms";
+    return (milliseconds / 1000).toFixed(milliseconds < 10000 ? 1 : 0) + " s";
+  }
+
+  function traceSummary(event) {
+    const data = event.data || {};
+    if (data.tool_name) return data.tool_name + (data.result_size ? " · " + data.result_size + " bytes" : "");
+    if (data.model) return data.model + (data.model_step ? " · step " + data.model_step : "");
+    if (data.error) return data.error;
+    if (data.answer) return data.answer;
+    if (data.content) return data.content;
+    if (data.message) {
+      if (data.message.content) return data.message.content;
+      if (data.message.role) return data.message.role;
+    }
+    return event.status || "";
+  }
+
+  function traceEventClass(event) {
+    return event.type.indexOf("tool.") === 0 ? "tool" : "";
+  }
+
+  async function loadTraceRuns() {
+    traceStatus.textContent = "加载中…";
+    try {
+      const status = runStatusFilter.value;
+      let url = "/api/runs?session=" + encodeURIComponent(session);
+      if (status) url += "&status=" + encodeURIComponent(status);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const data = await response.json();
+      traceRuns = data.runs || [];
+      runSelect.innerHTML = "";
+      if (!traceRuns.length) {
+        const empty = document.createElement("option");
+        empty.textContent = "当前 Session 暂无 Trace";
+        empty.value = "";
+        runSelect.appendChild(empty);
+        traceList.innerHTML = '<div class="trace-empty">当前 Session 暂无执行轨迹</div>';
+        traceDetail.innerHTML = '<div class="trace-empty">完成一次对话后，Trace 会出现在这里</div>';
+      } else {
+        traceRuns.forEach(function (run) {
+          const option = document.createElement("option");
+          option.value = run.run_id;
+          const inputLabel = run.input_text ? " · " + run.input_text.slice(0, 28) : "";
+          option.textContent = (run.status || "run") + " · " + run.run_id.slice(0, 10) + inputLabel + " · " + (run.event_count || 0) + " events";
+          runSelect.appendChild(option);
+        });
+        await loadTraceRun(traceRuns[0].run_id);
+      }
+      traceStatus.textContent = traceRuns.length + " runs";
+    } catch (err) {
+      traceStatus.textContent = "加载失败";
+      traceList.innerHTML = '<div class="trace-empty">无法读取 Trace：' + err.message + '</div>';
+    }
+  }
+
+  async function loadTraceRun(runID) {
+    if (!runID) return;
+    traceStatus.textContent = "读取 Run…";
+    try {
+      const response = await fetch("/api/traces/run?run_id=" + encodeURIComponent(runID));
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const run = await response.json();
+      traceEvents = run.events || [];
+      renderTraceRun(run);
+      traceStatus.textContent = (run.status || "run") + " · " + traceEvents.length + " events";
+    } catch (err) {
+      traceStatus.textContent = "读取失败";
+      traceList.innerHTML = '<div class="trace-empty">无法读取 Run：' + err.message + '</div>';
+    }
+  }
+
+  function nodeKind(event) {
+    if (event.type === "input.received") return "input";
+    if (event.type.indexOf("model.") === 0) return "model";
+    if (event.type.indexOf("tool.") === 0) return "tool";
+    if (event.type === "assistant.message.completed") return "assistant";
+    if (event.type.indexOf("context.") === 0) return "context";
+    if (event.type === "system.message") return "system";
+    if (event.type.indexOf("user.question.") === 0) return "question";
+    return "run";
+  }
+
+  function nodeLabel(kind, eventType) {
+    if (kind === "run") return { "run.queued": "QUEUED", "run.started": "STARTED", "run.finished": "FINISHED" }[eventType] || "LIFECYCLE";
+    return { input: "USER", model: "MODEL", tool: "TOOL", assistant: "ASSISTANT", context: "CONTEXT", system: "SYSTEM", question: "QUESTION" }[kind] || "EVENT";
+  }
+
+  function buildTraceNodes(events) {
+    const nodes = [];
+    let activeModel = null;
+    const activeTools = {};
+    let currentStep = null;
+    events.forEach(function (event) {
+      // Delta 是底层实时输出，完整的 assistant/model/tool 事件已经覆盖它。
+      if (event.type === "delta" || event.type === "reasoning" || event.type === "tool_call" || event.type === "tool_result") return;
+      const eventData = event.data || {};
+      const eventStep = Number(eventData.model_step);
+      if (Number.isFinite(eventStep) && eventStep > 0) currentStep = eventStep;
+      const kind = nodeKind(event);
+      if (event.type === "model.request.started") {
+        activeModel = { kind: "model", label: "MODEL", summary: traceSummary(event), events: [event], start: event.timestamp, step: currentStep };
+        nodes.push(activeModel);
+        return;
+      }
+      if (event.type === "model.response.finished" || event.type === "model.request.failed") {
+        if (activeModel) {
+          activeModel.events.push(event);
+          activeModel.summary = event.data && event.data.error ? event.data.error : (event.status || activeModel.summary);
+        } else {
+          nodes.push({ kind: "model", label: "MODEL", summary: traceSummary(event), events: [event], start: event.timestamp, step: currentStep });
+        }
+        return;
+      }
+      if (event.type === "tool.execution.started") {
+        const data = event.data || {};
+        const node = { kind: "tool", label: data.tool_name || "TOOL", summary: traceSummary(event), events: [event], start: event.timestamp, toolID: data.tool_call_id, step: currentStep };
+        nodes.push(node);
+        if (data.tool_call_id) activeTools[data.tool_call_id] = node;
+        return;
+      }
+      if (event.type === "tool.execution.finished" || event.type === "tool.execution.failed") {
+        const data = event.data || {};
+        const node = activeTools[data.tool_call_id];
+        if (node) {
+          node.events.push(event);
+          node.summary = data.error || (data.result_size ? data.result_size + " bytes" : event.status || node.summary);
+        } else {
+          nodes.push({ kind: "tool", label: data.tool_name || "TOOL", summary: traceSummary(event), events: [event], start: event.timestamp, toolID: data.tool_call_id, step: currentStep });
+        }
+        return;
+      }
+      if (event.type === "run.queued" || event.type === "run.started" || event.type === "run.finished") {
+        nodes.push({ kind: "run", label: nodeLabel(kind, event.type), summary: traceSummary(event), events: [event], start: event.timestamp, step: null });
+        return;
+      }
+      nodes.push({ kind: kind, label: nodeLabel(kind), summary: traceSummary(event), events: [event], start: event.timestamp, step: currentStep });
+    });
+    return nodes;
+  }
+
+  function renderTraceRun(run) {
+    traceList.innerHTML = "";
+    const summary = document.createElement("div");
+    summary.className = "run-summary";
+    const toolStatuses = Object.keys(run.tool_statuses || {}).map(function (id) {
+      return id.slice(0, 8) + ":" + run.tool_statuses[id];
+    });
+    function addSummaryItem(label, value) {
+      const item = document.createElement("span");
+      const strong = document.createElement("strong");
+      strong.textContent = label;
+      item.appendChild(strong);
+      item.appendChild(document.createTextNode(" " + value));
+      summary.appendChild(item);
+    }
+    addSummaryItem("Run", run.status || "-");
+    if (run.input_text) addSummaryItem("Input", run.input_text);
+    addSummaryItem("Model", run.model_status || "-");
+    addSummaryItem("Tools", toolStatuses.length ? toolStatuses.join(", ") : "-");
+    addSummaryItem("Calls", (run.model_calls || 0) + " model / " + (run.tool_calls || 0) + " tool");
+    if (run.status_reason) addSummaryItem("Reason", run.status_reason);
+    if (run.trace_warning) addSummaryItem("Trace", run.trace_warning);
+    else if (run.trace_complete) addSummaryItem("Trace", "complete");
+    traceList.appendChild(summary);
+    const nodes = buildTraceNodes(traceEvents);
+    const overview = document.createElement("div");
+    overview.className = "trace-overview";
+    const timedNodes = nodes.filter(function (node) { return node.kind === "input" || node.kind === "model" || node.kind === "tool"; });
+    const starts = timedNodes.map(function (node) { return eventMillis(node.events[0]); }).filter(Boolean);
+    const ends = timedNodes.map(function (node) { return eventMillis(node.events[node.events.length - 1]) + nodeDuration(node); }).filter(Boolean);
+    const timelineStart = starts.length ? Math.min.apply(null, starts) : 0;
+    const timelineEnd = ends.length ? Math.max.apply(null, ends) : timelineStart + 1;
+    const timelineSpan = Math.max(1, timelineEnd - timelineStart);
+
+    ["input", "model", "tool"].forEach(function (kind) {
+      const lane = document.createElement("div"); lane.className = "trace-lane";
+      const kindNodes = nodes.filter(function (node) { return node.kind === kind; });
+      const label = document.createElement("div"); label.className = "lane-label"; label.textContent = kind === "input" ? "Input" : kind === "model" ? "Model" : "Tools";
+      label.title = kindNodes.length ? kindNodes.length + " events · " + formatDuration(kindNodes.reduce(function (sum, node) { return sum + nodeDuration(node); }, 0)) : "No events";
+      const track = document.createElement("div"); track.className = "lane-track";
+      kindNodes.forEach(function (node) {
+        const block = document.createElement("button"); block.className = "lane-block " + kind;
+        const start = eventMillis(node.events[0]);
+        const duration = nodeDuration(node);
+        const left = Math.max(0, ((start - timelineStart) / timelineSpan) * 100);
+        const width = Math.max(0.8, (duration / timelineSpan) * 100);
+        block.style.left = left + "%";
+        block.style.width = Math.min(width, 100 - left) + "%";
+        block.title = node.label + " · " + formatDuration(duration) + (node.summary ? " · " + node.summary : "");
+        block.addEventListener("click", function () { selectTraceNode(node); });
+        track.appendChild(block);
+      });
+      lane.appendChild(label); lane.appendChild(track); overview.appendChild(lane);
+    });
+    traceList.appendChild(overview);
+
+    const groups = [];
+    const groupsByStep = {};
+    nodes.forEach(function (node) {
+      const key = node.step == null ? "lifecycle" : String(node.step);
+      let group = groupsByStep[key];
+      if (!group) {
+        group = { key: key, step: node.step, nodes: [] };
+        groupsByStep[key] = group;
+        groups.push(group);
+      }
+      group.nodes.push(node);
+    });
+    groups.forEach(function (group) {
+      const section = document.createElement("section"); section.className = "trace-step-group";
+      const heading = document.createElement("div"); heading.className = "trace-step-heading";
+      const title = document.createElement("span"); title.textContent = group.step == null ? "Run lifecycle" : "Model step " + group.step;
+      const count = document.createElement("small"); count.textContent = group.nodes.length + " nodes";
+      heading.appendChild(title); heading.appendChild(count); section.appendChild(heading);
+      group.nodes.forEach(function (node) {
+        const button = document.createElement("button"); button.className = "trace-node " + node.kind;
+        const type = document.createElement("span"); type.className = "node-type"; type.textContent = node.label;
+        const summary = document.createElement("span"); summary.className = "node-summary"; summary.textContent = node.summary || "";
+        const timestamp = document.createElement("span"); timestamp.className = "node-time"; timestamp.textContent = traceTime(node.start);
+        button.appendChild(type); button.appendChild(summary); button.appendChild(timestamp);
+        button.addEventListener("click", function () { selectTraceNode(node, button); });
+        section.appendChild(button);
+      });
+      traceList.appendChild(section);
+    });
+    if (nodes.length) selectTraceNode(nodes[nodes.length - 1]);
+  }
+
+  function selectTraceNode(node, button) {
+    document.querySelectorAll(".trace-node.selected, .lane-block.selected").forEach(function (item) { item.classList.remove("selected"); });
+    if (button) button.classList.add("selected");
+    renderTraceDetail(node);
+  }
+
+  function renderTraceDetail(node) {
+    const event = node.events[node.events.length - 1];
+    const data = event.data || {};
+    traceDetail.innerHTML = "";
+    const kicker = document.createElement("div");
+    kicker.className = "detail-kicker";
+    kicker.textContent = node.kind === "run" ? "RUN" : node.label;
+    const title = document.createElement("h2");
+    title.className = "detail-title";
+    title.textContent = node.kind === "run" ? "RUN · " + node.label : node.label;
+    const grid = document.createElement("dl");
+    grid.className = "detail-grid";
+    [["Status", event.status || "-"], ["Events", node.events.length], ["Time", node.start], ["Duration", event.duration_ms ? event.duration_ms + " ms" : "-"]].forEach(function (item) {
+      const key = document.createElement("dt"); key.textContent = item[0];
+      const value = document.createElement("dd"); value.textContent = item[1];
+      grid.appendChild(key); grid.appendChild(value);
+    });
+    traceDetail.appendChild(kicker);
+    traceDetail.appendChild(title);
+    traceDetail.appendChild(grid);
+
+    if (node.kind === "model") {
+      const request = node.events.find(function (item) { return item.type === "model.request.started"; });
+      const requestData = request && request.data || {};
+      appendDetailCode("Messages", requestData.messages || []);
+      const tools = requestData.tool_definitions || [];
+      const toolsSection = document.createElement("section");
+      toolsSection.className = "detail-section";
+      const toolsHeading = document.createElement("h3"); toolsHeading.textContent = "Tools · " + tools.length;
+      toolsSection.appendChild(toolsHeading);
+      if (!tools.length) {
+        const empty = document.createElement("div"); empty.className = "trace-empty"; empty.textContent = "本轮没有暴露工具"; empty.style.padding = "12px 0"; toolsSection.appendChild(empty);
+      }
+      tools.forEach(function (tool) {
+        const details = document.createElement("details");
+        const summary = document.createElement("summary"); summary.textContent = tool.name || "unnamed tool";
+        const code = document.createElement("pre"); code.className = "detail-code"; code.textContent = JSON.stringify({ description: tool.description, parameters: tool.parameters }, null, 2);
+        details.appendChild(summary); details.appendChild(code); toolsSection.appendChild(details);
+      });
+      traceDetail.appendChild(toolsSection);
+      appendDetailCode("Timing", { model_step: requestData.model_step, streaming: requestData.streaming, duration_ms: event.duration_ms, usage: data.usage, time_to_first_token_ms: data.time_to_first_token_ms });
+    }
+    if (node.kind === "tool") {
+      const started = node.events.find(function (item) { return item.type === "tool.execution.started"; });
+      const finished = node.events.find(function (item) { return item.type.indexOf("tool.execution.finished") === 0 || item.type.indexOf("tool.execution.failed") === 0; });
+      appendDetailCode("Arguments", started && started.data ? { tool_call_id: started.data.tool_call_id, tool_name: started.data.tool_name, arguments: started.data.arguments } : {});
+      appendDetailCode("Result", finished && finished.data ? { result: finished.data.result, error: finished.data.error, result_size: finished.data.result_size } : {});
+    }
+    appendDetailCode("Payload", node.events.map(function (item) { return { type: item.type, status: item.status, data: item.data }; }));
+  }
+
+  function appendDetailCode(title, value) {
+    const section = document.createElement("section");
+    section.className = "detail-section";
+    const heading = document.createElement("h3"); heading.textContent = title;
+    const code = document.createElement("pre"); code.className = "detail-code"; code.textContent = JSON.stringify(value, null, 2);
+    section.appendChild(heading); section.appendChild(code); traceDetail.appendChild(section);
+  }
+
+  // 建立 SSE 连接，接收 AG-UI 事件流。
+  //
+  // 服务端把内部分片翻译成标准 AG-UI 事件（每条 data 里带 type）：
+  //   SESSION / RUN_STARTED / RUN_FINISHED
+  //   TEXT_MESSAGE_START / TEXT_MESSAGE_CONTENT / TEXT_MESSAGE_END
+  //   REASONING_MESSAGE_START / REASONING_MESSAGE_CONTENT / REASONING_MESSAGE_END
+  //   TOOL_CALL_START / TOOL_CALL_ARGS / TOOL_CALL_END / TOOL_CALL_RESULT
+  //   CUSTOM (name=ASK_USER_QUESTION)
+  // 前端是"哑渲染"：按 type 分发，用 messageId / toolCallId 把同一逻辑流的
+  // 事件归到同一个 DOM 元素上。
+  function connect() {
+    const es = new EventSource("/api/stream?session=" + encodeURIComponent(session));
+
+    es.onmessage = function (e) {
+      let evt;
+      try { evt = JSON.parse(e.data); } catch (_) { return; }
+      handleAguiEvent(evt);
+    };
+
+    es.onerror = function () {
+      setStatus("连接断开，重连中…", false);
+      // EventSource 会自动重连，这里只更新状态。
+    };
+  }
+
+  // textMessages / reasoningMessages / toolCalls 记录进行中的 AG-UI 逻辑流到
+  // 其 DOM 气泡的映射（按 messageId / toolCallId 归组）。
+  const textMessages = {};
+  const reasoningMessages = {};
+  const toolCalls = {};
+
+  function handleAguiEvent(evt) {
+    switch (evt.type) {
+      case "SESSION":
+        setStatus("已连接", true);
+        break;
+
+      case "RUN_STARTED":
+        // 新一轮开始。
+        break;
+
+      case "TEXT_MESSAGE_START":
+        textMessages[evt.messageId] = addMessage("bot", "");
+        textMessages[evt.messageId].classList.add("pending");
+        break;
+      case "TEXT_MESSAGE_CONTENT": {
+        let b = textMessages[evt.messageId];
+        if (!b) { b = addMessage("bot", ""); b.classList.add("pending"); textMessages[evt.messageId] = b; }
+        b.textContent += evt.delta || "";
+        scrollToBottom();
+        break;
+      }
+      case "TEXT_MESSAGE_END":
+        if (textMessages[evt.messageId]) {
+          textMessages[evt.messageId].classList.remove("pending");
+          delete textMessages[evt.messageId];
+        }
+        break;
+
+      case "REASONING_MESSAGE_START":
+        reasoningMessages[evt.messageId] = addCollapsibleMessage("reasoning", "", "思考");
+        reasoningMessages[evt.messageId].classList.add("pending");
+        break;
+      case "REASONING_MESSAGE_CONTENT": {
+        let b = reasoningMessages[evt.messageId];
+        if (!b) { b = addCollapsibleMessage("reasoning", "", "思考"); b.classList.add("pending"); reasoningMessages[evt.messageId] = b; }
+        b.textContent += evt.delta || "";
+        scrollToBottom();
+        break;
+      }
+      case "REASONING_MESSAGE_END":
+        if (reasoningMessages[evt.messageId]) {
+          reasoningMessages[evt.messageId].classList.remove("pending");
+          delete reasoningMessages[evt.messageId];
+        }
+        break;
+
+      case "TOOL_CALL_START":
+        toolCalls[evt.toolCallId] = addCollapsibleMessage("tool", evt.toolCallName + "(", "工具调用");
+        break;
+      case "TOOL_CALL_ARGS": {
+        const b = toolCalls[evt.toolCallId];
+        if (b) b.textContent += (evt.delta || "");
+        break;
+      }
+      case "TOOL_CALL_END": {
+        const b = toolCalls[evt.toolCallId];
+        if (b) b.textContent += ")";
+        break;
+      }
+      case "TOOL_CALL_RESULT":
+        addCollapsibleMessage("tool", evt.content || "（空结果）", "工具结果");
+        scrollToBottom();
+        break;
+
+      case "CUSTOM":
+        if (evt.name === "ASK_USER_QUESTION" && evt.value) {
+          showQuestion(evt.value.question || "", evt.value.options || []);
+        }
+        break;
+
+      case "RUN_FINISHED":
+        finishResponse();
+        break;
+    }
+  }
+
+  async function send() {
+    const text = input.value.trim();
+    if (!text) return;
+    // 回答模式：把输入当作对 agent 提问的回答（会禁用选项按钮）。
+    if (answering) {
+      input.value = "";
+      input.style.height = "auto";
+      answerQuestion(text);
+      return;
+    }
+    if (waiting) return;
+    input.value = "";
+    input.style.height = "auto";
+    doSend(text);
+  }
+
+  // doSend 真正把一条文本发到后端，并进入"等待回复"状态。
+  async function doSend(text) {
+    addMessage("user", text);
+    waiting = true;
+    activeRun = true;
+    sendBtn.disabled = true;
+    cancelBtn.disabled = false;
+
+    try {
+      const resp = await fetch("/api/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session: session, text: text }),
+      });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+    } catch (err) {
+      addMessage("bot", "发送失败：" + err.message);
+      waiting = false;
+      activeRun = false;
+      sendBtn.disabled = false;
+      cancelBtn.disabled = true;
+    }
+  }
+
+  // 自适应高度。
+  input.addEventListener("input", function () {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 160) + "px";
+  });
+
+  sendBtn.addEventListener("click", send);
+  cancelBtn.addEventListener("click", cancelTask);
+  chatTab.addEventListener("click", function () { switchView("chat"); });
+  traceTab.addEventListener("click", function () { switchView("trace"); });
+  runSelect.addEventListener("change", function () { loadTraceRun(runSelect.value); });
+  runStatusFilter.addEventListener("change", loadTraceRuns);
+  refreshTrace.addEventListener("click", loadTraceRuns);
+
+  connect();
+  input.focus();
+})();
+</script>
+</body>
+</html>

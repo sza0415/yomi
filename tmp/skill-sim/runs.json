@@ -1,0 +1,124 @@
+{
+  "runs": [
+    {
+      "case_id": "kbcli-script-sage-correct",
+      "run_id": "run-001-correct",
+      "skill_version": "kbcli@2025-08-20",
+      "status": "ok",
+      "selected_skills": ["kbcli"],
+      "actual_path": [
+        "match_intent",
+        "read_references",
+        "decision_main",
+        "node_sage",
+        "output_sage",
+        "path_kbcli"
+      ],
+      "execution_chain": [
+        { "id": "match_intent",    "kind": "input",      "skill": "kbcli", "required": true },
+        { "id": "read_references", "kind": "validation", "skill": "kbcli", "required": true, "tool": "read_file" },
+        { "id": "decision_main",   "kind": "decision",   "skill": "kbcli", "required": true },
+        { "id": "node_sage",       "kind": "tool",       "skill": "kbcli", "tool": "kbcli sage", "required": true },
+        { "id": "output_sage",     "kind": "output",     "skill": "kbcli", "required": true },
+        { "id": "path_kbcli",      "kind": "output",     "skill": "kbcli", "required": true }
+      ],
+      "tool_calls": [
+        "read_file",
+        "kbcli sage"
+      ],
+      "acknowledged_notices": [
+        "禁止跳过references凭记忆拼接命令",
+        "不得输出proj_id/scriptAnalysisId/scriptVersionId字段名或值"
+      ],
+      "output_type": "专家回答",
+      "output_text": "用户给到的剧本专家问答场景：故事围绕亲情的悲剧核心。结构从平和的除夕夜起笔铺陈，随后以一通深夜求救信号被错过为冲突点，最后以子女间关系的重新审视收束。三位主要人物以克制笔触凸显各自的精神底色：父亲的沉默源于少年丧父的创伤，母亲的隐忍是对家庭完整性的最后捍卫，子女的奔波外化为难以启齿的愧疚。"
+    },
+    {
+      "case_id": "kbcli-script-sage-wrong-branch",
+      "run_id": "run-002-misroute",
+      "skill_version": "kbcli@2025-08-20",
+      "status": "wrong-branch",
+      "selected_skills": ["kbcli"],
+      "actual_path": [
+        "match_intent",
+        "read_references",
+        "decision_main",
+        "node_recall",
+        "decision_search_mode",
+        "node_dsl_mode",
+        "check_capability",
+        "output_dsl",
+        "path_kbcli"
+      ],
+      "execution_chain": [
+        { "id": "match_intent",         "kind": "input",      "skill": "kbcli", "required": true },
+        { "id": "read_references",      "kind": "validation", "skill": "kbcli", "required": true },
+        { "id": "decision_main",        "kind": "decision",   "skill": "kbcli", "required": true },
+        { "id": "node_recall",          "kind": "tool",       "skill": "kbcli", "tool": "kbcli kb-recall", "required": true },
+        { "id": "decision_search_mode", "kind": "decision",   "skill": "kbcli", "required": true },
+        { "id": "node_dsl_mode",        "kind": "tool",       "skill": "kbcli", "tool": "kbcli kb-search", "required": false },
+        { "id": "check_capability",     "kind": "decision",   "skill": "kbcli", "required": true },
+        { "id": "output_dsl",           "kind": "output",     "skill": "kbcli", "required": false },
+        { "id": "path_kbcli",           "kind": "output",     "skill": "kbcli", "required": true }
+      ],
+      "tool_calls": [
+        "kbcli kb-recall",
+        "kbcli kb-search"
+      ],
+      "acknowledged_notices": [],
+      "output_type": "ID元数据",
+      "output_text": "返回项目ID元数据列表，未走 sage 专家分析。"
+    },
+    {
+      "case_id": "kbcli-dsl-simple-query",
+      "run_id": "run-003-dsl-simple",
+      "skill_version": "kbcli@2025-08-20",
+      "status": "ok",
+      "selected_skills": ["kbcli"],
+      "actual_path": [
+        "match_intent",
+        "read_references",
+        "decision_main",
+        "node_recall",
+        "decision_search_mode",
+        "node_dsl_mode",
+        "check_capability",
+        "output_dsl",
+        "path_kbcli"
+      ],
+      "execution_chain": [
+        { "id": "node_recall", "kind": "tool", "skill": "kbcli", "tool": "kbcli kb-recall", "required": true },
+        { "id": "node_dsl_mode", "kind": "tool", "skill": "kbcli", "tool": "kbcli kb-search", "required": true }
+      ],
+      "tool_calls": ["kbcli kb-recall", "kbcli kb-search"],
+      "acknowledged_notices": [],
+      "output_type": "ID元数据",
+      "output_text": "查询到《逐玉》项目ID：OPIID-逐玉2024，对应分类为：电视剧。"
+    },
+    {
+      "case_id": "kbcli-sql-mode",
+      "run_id": "run-004-sql-mode",
+      "skill_version": "kbcli@2025-08-20",
+      "status": "ok",
+      "selected_skills": ["kbcli"],
+      "actual_path": [
+        "match_intent",
+        "read_references",
+        "decision_main",
+        "node_recall",
+        "decision_search_mode",
+        "node_sql_mode",
+        "output_sql",
+        "path_kbcli"
+      ],
+      "execution_chain": [
+        { "id": "node_recall", "kind": "tool", "skill": "kbcli", "tool": "kbcli kb-recall", "required": true },
+        { "id": "node_sql_mode", "kind": "tool", "skill": "kbcli", "tool": "kbcli kb-search", "required": true }
+      ],
+      "tool_calls": ["kbcli kb-recall", "kbcli kb-search"],
+      "acknowledged_notices": [],
+      "output_type": "指标数据",
+      "output_text": "《逐玉》播出期间总播放量 12.3 亿，CSM 收视率均值 1.85%，连续 12 周位居同时段前三。"
+    }
+  ]
+}
