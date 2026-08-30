@@ -142,6 +142,9 @@ enabled
 
 如果 Reranker 已配置但 Hybrid 不可用，会额外打印 inactive warning。
 
+当 yomi 通过本地自动管理启动或创建 `yomi-qdrant` 后收到 `SIGINT`/`SIGTERM`，退出流程会
+停止本次由 yomi 接管的容器；启动前已经运行的容器不由 yomi 停止。
+
 ## 3. 写入链路：Run 成功后产生长期记忆
 
 写入入口是 `internal/agent/memory_pipeline.go`。

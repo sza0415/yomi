@@ -114,13 +114,17 @@ func main() {
 	embeddingAPIKey := envOr("SZABOT_EMBEDDING_API_KEY", os.Getenv("DEEPSEEK_API_KEY"))
 	embeddingModel := strings.TrimSpace(os.Getenv("SZABOT_EMBEDDING_MODEL"))
 	qdrantReady := false
+	var qdrantCleanup func(context.Context) error
 	if qdrantEnabled && qdrantURL != "" {
 		qdrantReady = true
 		if qdrantAutoStartEnabled(qdrantURL) {
 			qdrantCtx, qdrantCancel := context.WithTimeout(ctx, 30*time.Second)
-			if err := memory.EnsureLocalQdrant(qdrantCtx, qdrantURL); err != nil {
+			cleanup, err := memory.EnsureLocalQdrantManaged(qdrantCtx, qdrantURL)
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "warning: Qdrant auto-start failed; semantic memory indexing disabled: %v\n", err)
 				qdrantReady = false
+			} else {
+				qdrantCleanup = cleanup
 			}
 			qdrantCancel()
 		}
@@ -304,6 +308,15 @@ func main() {
 
 	// 5. 等退出信号。
 	<-ctx.Done()
+	if qdrantCleanup != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := qdrantCleanup(cleanupCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: Qdrant shutdown cleanup failed: %v\n", err)
+		} else {
+			fmt.Println("qdrant container stopped (owned by yomi)")
+		}
+		cleanupCancel()
+	}
 	fmt.Println("\nyomi stopped.")
 }
 
