@@ -15,3 +15,6 @@
 .szabot/
 /sessionlogs/
 *.local.json
+
+# Frontend dependencies (Vite build output is checked in for Go embedding)
+/internal/channels/web/frontend/node_modules/

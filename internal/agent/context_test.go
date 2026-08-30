@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/ziangsun/szabot/internal/memory"
 	"github.com/ziangsun/szabot/internal/providers"
 )
 
@@ -56,5 +58,43 @@ func TestContextManagerCompactsAndPersistsSummary(t *testing.T) {
 	}
 	if archives[0].CoveredFrom != 0 || archives[0].CoveredTo != 2 || archives[0].Summary == "" {
 		t.Fatalf("archive=%#v", archives[0])
+	}
+}
+
+type contextMemoryStore struct{}
+
+func (contextMemoryStore) Search(context.Context, memory.Query) ([]memory.Memory, error) {
+	return []memory.Memory{{ID: "mem-1", UserID: "alice", Kind: memory.KindPreference, Content: "用户偏好中文回答", Confidence: 0.93, SourceRunID: "run-1"}}, nil
+}
+func (contextMemoryStore) Upsert(context.Context, memory.Memory) error { return nil }
+func (contextMemoryStore) Get(context.Context, string, string) (memory.Memory, error) {
+	return memory.Memory{}, nil
+}
+func (contextMemoryStore) List(context.Context, string) ([]memory.Memory, error) { return nil, nil }
+func (contextMemoryStore) Delete(context.Context, string, string, string) error  { return nil }
+func (contextMemoryStore) Rebuild(context.Context, string) error                 { return nil }
+
+func TestContextManagerInjectsScopedMemory(t *testing.T) {
+	m := &ContextManager{Memory: contextMemoryStore{}}
+	got, err := m.BuildForUser(context.Background(), "alice", "session-1", "SYS", providers.Message{Role: providers.RoleUser, Content: "怎么回答？"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MemoryCount != 1 || len(got.MemoryIDs) != 1 || got.MemoryIDs[0] != "mem-1" || got.MemoryTokens == 0 || len(got.Messages) != 3 {
+		t.Fatalf("memory context = %#v count=%d", got.Messages, got.MemoryCount)
+	}
+	if got.Messages[1].Role != providers.RoleSystem || !strings.Contains(got.Messages[1].Content, "user_memory") {
+		t.Fatalf("memory message = %#v", got.Messages[1])
+	}
+	if !strings.Contains(got.Messages[1].Content, "仅供参考") || !strings.Contains(got.Messages[1].Content, "用户偏好中文回答") {
+		t.Fatalf("memory message content = %q", got.Messages[1].Content)
+	}
+
+	withoutUser, err := m.BuildForUser(context.Background(), "", "session-2", "SYS", providers.Message{Role: providers.RoleUser, Content: "怎么回答？"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutUser.MemoryCount != 0 || len(withoutUser.Messages) != 2 {
+		t.Fatalf("unscoped memory = %#v count=%d", withoutUser.Messages, withoutUser.MemoryCount)
 	}
 }

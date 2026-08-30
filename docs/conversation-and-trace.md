@@ -33,6 +33,10 @@ flowchart LR
 | 失败 Run | 不写入本轮 user/assistant | 保存状态和错误 |
 | 写入格式 | JSONL | JSONL 事件流 |
 
+Run Snapshot 还包含异步 Memory 处理状态（候选、拒绝、写入和索引计数）。Memory 事件
+追加到对应 Run 的 Trace 中；`run.finished` 表示用户答案已完成，不代表后台 Memory
+提取和索引一定已经结束。
+
 ## 2. 存储目录
 
 启动时，`cmd/szabot/main.go` 将当前工作目录视为 workspace。存储根目录按以下优先级确定：

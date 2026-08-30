@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ziangsun/szabot/internal/bus"
+	"github.com/ziangsun/szabot/internal/memory"
 	"github.com/ziangsun/szabot/internal/providers"
 	tracing "github.com/ziangsun/szabot/internal/trace"
 )
@@ -53,6 +54,14 @@ type Loop struct {
 	SystemPrompt string
 	// Context 可选地为长会话启用预算控制和 rolling summary。
 	Context *ContextManager
+	// Memory is the optional cross-session user memory store. ContextManager
+	// performs the scoped lookup; Loop only supplies the inbound UserID.
+	Memory          memory.Store
+	MemoryExtractor memory.Extractor
+	MemoryPolicy    memory.Policy
+	MemoryEmbedder  memory.EmbeddingProvider
+	MemoryIndexer   memory.Indexer
+	MemoryTimeout   time.Duration
 
 	mu       sync.Mutex
 	pending  map[string]*pendingAsk
@@ -230,7 +239,19 @@ func (l *Loop) handleRun(ctx context.Context, in bus.InboundMessage, run *Run) {
 	var messages []providers.Message
 	historyCount := 0
 	if l.Context != nil {
-		built, err := l.Context.Build(ctx, in.SessionID, l.SystemPrompt, userMsg)
+		contextManager := l.Context
+		if contextManager.Memory == nil && l.Memory != nil {
+			configured := *contextManager
+			configured.Memory = l.Memory
+			contextManager = &configured
+		}
+		memoryConfigured := contextManager.Memory != nil && strings.TrimSpace(in.UserID) != ""
+		if memoryConfigured {
+			l.record(ctx, run, tracing.EventMemoryRetrievalStarted, "started", map[string]any{
+				"user_id_hash": hashScope(in.UserID), "query_hash": hashScope(in.Text),
+			})
+		}
+		built, err := contextManager.BuildForUser(ctx, in.UserID, in.SessionID, l.SystemPrompt, userMsg)
 		if err != nil {
 			log.Printf("[loop] build context session=%s error: %v", in.SessionID, err)
 			status := RunFailed
@@ -249,6 +270,23 @@ func (l *Loop) handleRun(ctx context.Context, in bus.InboundMessage, run *Run) {
 			return
 		}
 		messages, historyCount = built.Messages, built.HistoryCount
+		if memoryConfigured {
+			if built.MemoryError != "" {
+				l.record(ctx, run, tracing.EventMemoryRetrievalFailed, "failed", map[string]any{
+					"user_id_hash": hashScope(in.UserID), "query_hash": hashScope(in.Text), "error": built.MemoryError,
+				})
+			} else {
+				l.record(ctx, run, tracing.EventMemoryRetrievalFinished, "completed", map[string]any{
+					"user_id_hash": hashScope(in.UserID), "query_hash": hashScope(in.Text), "memory_count": built.MemoryCount, "memory_ids": built.MemoryIDs,
+				})
+				if built.MemoryCount > 0 {
+					l.record(ctx, run, tracing.EventMemoryContextInjected, "completed", map[string]any{
+						"user_id_hash": hashScope(in.UserID), "query_hash": hashScope(in.Text),
+						"memory_count": built.MemoryCount, "memory_ids": built.MemoryIDs, "estimated_tokens": built.MemoryTokens,
+					})
+				}
+			}
+		}
 		if built.Compaction != nil {
 			c := built.Compaction
 			l.record(ctx, run, tracing.EventContextCompacted, "completed", map[string]any{
@@ -491,7 +529,8 @@ func (l *Loop) handleRun(ctx context.Context, in bus.InboundMessage, run *Run) {
 		log.Printf("[loop] run=%s completion transition failed: %v", run.ID, err)
 		return
 	}
-	l.record(ctx, run, tracing.EventRunFinished, string(RunCompleted), map[string]any{"usage": result.Usage, "answer": result.Answer})
+	l.startMemoryExtraction(ctx, run, in, result.Answer)
+	l.record(ctx, run, tracing.EventRunFinished, string(RunCompleted), map[string]any{"usage": result.Usage, "answer": result.Answer, "memory": run.Snapshot().Memory})
 
 	l.publishRunDone(ctx, in, run)
 }

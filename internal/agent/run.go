@@ -43,18 +43,30 @@ type RunUsage struct {
 	ToolCalls  int `json:"tool_calls"`
 }
 
+type MemoryRunState struct {
+	Status         string    `json:"status"` // pending | running | completed | failed
+	CandidateCount int       `json:"candidate_count,omitempty"`
+	RejectedCount  int       `json:"rejected_count,omitempty"`
+	WrittenCount   int       `json:"written_count,omitempty"`
+	IndexedCount   int       `json:"indexed_count,omitempty"`
+	Error          string    `json:"error,omitempty"`
+	StartedAt      time.Time `json:"started_at,omitempty"`
+	FinishedAt     time.Time `json:"finished_at,omitempty"`
+}
+
 type Run struct {
-	ID           string    `json:"run_id"`
-	SessionID    string    `json:"session_id"`
-	AgentID      string    `json:"agent_id"`
-	Status       RunStatus `json:"status"`
-	Budget       RunBudget `json:"budget,omitempty"`
-	Usage        RunUsage  `json:"usage"`
-	QueuedAt     time.Time `json:"queued_at"`
-	StartedAt    time.Time `json:"started_at,omitempty"`
-	FinishedAt   time.Time `json:"finished_at,omitempty"`
-	Error        string    `json:"error,omitempty"`
-	StatusReason string    `json:"status_reason,omitempty"`
+	ID           string         `json:"run_id"`
+	SessionID    string         `json:"session_id"`
+	AgentID      string         `json:"agent_id"`
+	Status       RunStatus      `json:"status"`
+	Budget       RunBudget      `json:"budget,omitempty"`
+	Usage        RunUsage       `json:"usage"`
+	QueuedAt     time.Time      `json:"queued_at"`
+	StartedAt    time.Time      `json:"started_at,omitempty"`
+	FinishedAt   time.Time      `json:"finished_at,omitempty"`
+	Error        string         `json:"error,omitempty"`
+	StatusReason string         `json:"status_reason,omitempty"`
+	Memory       MemoryRunState `json:"memory"`
 
 	mu       sync.Mutex
 	sequence uint64
@@ -152,6 +164,12 @@ func isRunTerminal(status RunStatus) bool {
 func (r *Run) setUsage(usage RunUsage) {
 	r.mu.Lock()
 	r.Usage = usage
+	r.mu.Unlock()
+}
+
+func (r *Run) setMemoryState(state MemoryRunState) {
+	r.mu.Lock()
+	r.Memory = state
 	r.mu.Unlock()
 }
 

@@ -81,6 +81,16 @@ export SZABOT_WEB_ADDR=127.0.0.1:8080
 go run ./cmd/szabot
 ```
 
+Web 前端源码位于 `internal/channels/web/frontend`，使用 Vue 3 + Vite 构建；构建产物会嵌入 Go 二进制，运行时不需要 Node：
+
+```bash
+cd internal/channels/web/frontend
+npm install
+npm run build
+```
+
+也可以在 `internal/channels` 目录执行 `go generate` 自动刷新嵌入资源。
+
 ### Tool 接入
 
 #### 工具箱
@@ -170,12 +180,24 @@ go run ./cmd/szabot
 Conversation 是供后续请求使用的主线历史，按 SessionID 持久化为 JSONL；只有 Run 成功完成后，才追加本轮 user 和最终 assistant。超过预算时，较早消息由当前 Provider 压缩为 rolling summary，再发送摘要、最近消息和当前输入；原始历史不删除。
 
 ```bash
-export SZABOT_MAX_CONTEXT_TOKENS=8000
+export SZABOT_MAX_CONTEXT_TOKENS=100000
 export SZABOT_CONTEXT_RECENT_MESSAGES=10
-export SZABOT_TOOL_RESULT_MAX_TOKENS=1200
-export SZABOT_CONTEXT_OUTPUT_RESERVE_TOKENS=1024
-export SZABOT_SESSION_DIR=/data/yomi-sessions
+export SZABOT_TOOL_RESULT_MAX_TOKENS=10000
+export SZABOT_CONTEXT_OUTPUT_RESERVE_TOKENS=10000
+export SZABOT_SESSION_DIR=/sessionlogs
 ```
+
+这些环境变量分别控制上下文预算和会话文件位置：
+
+| 变量 | 示例值 | 说明 |
+| --- | ---: | --- |
+| `SZABOT_MAX_CONTEXT_TOKENS` | `8000` | 单次模型请求的上下文预算上限。预算包含消息、工具定义和输出预留；达到约 80% 时进入预警，超过上限时会压缩旧历史，仍无法满足则以 `context_budget_exceeded` 结束 Run。 |
+| `SZABOT_CONTEXT_RECENT_MESSAGES` | `10` | 上下文超限进行 rolling summary 时，保留最近多少条历史消息原文；更早消息会被压缩为摘要。这里的单位是消息条数，不是 token。 |
+| `SZABOT_TOOL_RESULT_MAX_TOKENS` | `1200` | 工具结果超过该近似 token 数时，会写入 `artifacts/`，模型只收到预览和 `artifact_id`，需要时再通过 `artifact_read` 读取原文。即使未超过该值，只要上下文接近上限，也可能被外置。 |
+| `SZABOT_CONTEXT_OUTPUT_RESERVE_TOKENS` | `1024` | 为模型本轮输出预留的上下文空间，不是输出长度上限；预留越大，可用于输入消息的空间越小。 |
+| `SZABOT_SESSION_DIR` | `sessionlogs` | 会话数据根目录，下面包含 `conversations/`、`archives/`、`artifacts/`、`traces/` 和 `memories/`。未设置时默认为启动工作目录下的 `sessionlogs/`。 |
+
+代码使用长度近似估算 token（通常按约 4 字节折算 1 token），不是具体模型 tokenizer 的精确计数。当前代码默认值为：上下文上限 `6000`、近期消息 `8`、工具结果上限 `1200`、输出预留 `1024`。`export` 只对当前 shell 及其启动的子进程生效。
 
 默认目录为启动工作目录下的 `sessionlogs/`：
 
@@ -184,7 +206,9 @@ sessionlogs/
 ├── conversations/   # 会话主线
 ├── archives/        # 分阶段压缩检查点
 ├── artifacts/       # 超大工具结果的原文和元数据
-└── traces/          # Run 完整轨迹
+├── traces/          # Run 完整轨迹
+└── memories/
+    └── memory.db     # 用户记忆当前状态、变更历史和 FTS5 索引
 ```
 
 单次 Run 内，超过 `SZABOT_TOOL_RESULT_MAX_TOKENS` 或导致上下文接近上限的工具结果会
@@ -197,9 +221,88 @@ Artifact 不会替代 Conversation 的主线历史。
 
 重置 Conversation 前先停止 yomi，再删除对应文件。当前锁只覆盖单个进程，不要让多个进程共享同一个 session 目录。
 
+### 用户记忆（第一、二阶段）
+
+Yomi 当前已接入一个按 `UserID` 隔离的长期记忆存储。记忆不替代 Conversation：Conversation
+仍然保存为 JSONL 原文，用户记忆保存为结构化 SQLite 记录，当前支持 `fact`、`preference`
+和 `episode` 三类内容。
+
+记忆数据位于 `sessionlogs/memories/memory.db`，包含：
+
+- 当前可服务的记忆记录；
+- 只追加的记忆变更事件（新增、更新、冲突、删除）；
+- SQLite FTS5 关键词索引。
+
+Memory 数据目录跟随 `SZABOT_SESSION_DIR`。自动提取默认对真实 LLM Provider 开启，Echo
+Provider 默认关闭：
+
+```bash
+export SZABOT_SESSION_DIR=./sessionlogs
+# 可选：关闭 Run 完成后的异步记忆提取
+export SZABOT_MEMORY_EXTRACTION=off
+# 可选：限制一次记忆提取/索引任务的最长时间
+export SZABOT_MEMORY_TIMEOUT=30s
+go run ./cmd/szabot
+```
+
+未设置时默认使用启动工作目录下的 `sessionlogs/`。Qdrant 默认使用本机
+`http://127.0.0.1:6333`，执行 `go run ./cmd/szabot` 时会自动检测、启动或创建容器；
+如果不需要 Qdrant，显式关闭即可：
+
+```bash
+export SZABOT_QDRANT_ENABLED=off
+```
+
+Qdrant 和 Embedding 语义索引只有在配置完整时才会启用：
+
+```bash
+export SZABOT_QDRANT_URL=http://localhost:6333
+export SZABOT_QDRANT_COLLECTION=yomi_memories
+export SZABOT_EMBEDDING_BASE_URL=https://api.openai.com/v1
+export SZABOT_EMBEDDING_API_KEY=your-embedding-key
+export SZABOT_EMBEDDING_MODEL=text-embedding-3-small
+```
+
+`SZABOT_QDRANT_URL` 可以省略，默认值是 `http://127.0.0.1:6333`。只有在使用远程
+Qdrant 时才需要显式填写 URL。
+
+当 `SZABOT_QDRANT_URL` 指向本机（`localhost`、`127.0.0.1` 或 `::1`）时，`go run
+./cmd/szabot` 会自动检测并启动或复用名为 `yomi-qdrant` 的 Docker 容器，并使用
+`yomi-qdrant-data` volume 持久化数据；不需要手动执行 `docker run`。Yomi 不会自动拉取
+镜像，首次使用前请手动准备镜像：
+
+```bash
+docker pull qdrant/qdrant:latest
+```
+
+远程 Qdrant 不由 Yomi 管理。生产环境或已有容器编排时可关闭自动管理：
+
+```bash
+export SZABOT_QDRANT_AUTO_START=off
+```
+
+每次构造上下文时，`ContextManager` 会使用当前用户文本检索最多 8 条相关记忆，并以
+`<user_memory>` 参考资料块注入模型上下文。记忆检索失败不会阻塞主对话；删除会保留历史
+事件，但被删除记录不会再次进入默认检索结果。
+
+`UserID` 是长期记忆的隔离键，`SessionID` 只是会话路由键。CLI 当前使用固定的
+`UserID=local`；Web 在尚未接入独立账户体系前使用 Session 作为用户标识，因此不同 Web
+Session 默认不会共享记忆。
+
+当前已支持 Run 完成后的异步候选提取、敏感信息策略过滤、重复候选去重、SQLite 写入、
+Embedding 生成和可选 Qdrant 派生索引。Qdrant 暂不参与查询侧混合召回，当前查询仍由
+SQLite FTS5 完成；用户侧 `memory list / correct / forget` 入口也尚未完成。完整设计、
+数据模型和后续路线见
+[`docs/user-memory-v1-design.md`](docs/user-memory-v1-design.md) 与
+[`docs/context-and-memory-plan.md`](docs/context-and-memory-plan.md)。
+
+每个 Run 的 JSON 快照还会记录 Memory 子状态：`pending`、`running`、`completed` 或
+`failed`，以及候选数、拒绝数、写入数、索引数和错误信息。Memory 事件会继续追加到同一个
+Run 的 Trace；异步处理完成后会更新该 Run 快照。
+
 ### Trace 建设
 
-Trace 不会回放给模型，按 Run 保存 JSONL 事件：Run 生命周期、system prompt、实际模型请求、reasoning、assistant 消息、工具参数与结果、错误、耗时和 usage。Trace 含未脱敏原文，当前没有自动轮转、保留期或脱敏机制。完整格式和写入时机见 [`docs/conversation-and-trace.md`](docs/conversation-and-trace.md)。
+Trace 不会回放给模型，按 Run 保存 JSONL 事件：Run 生命周期、system prompt、实际模型请求、reasoning、assistant 消息、工具参数与结果、错误、耗时和 usage。当前还会记录 Memory 检索、记忆上下文注入、提取、策略决策、候选接受/拒绝、SQLite 写入和可选索引结果，并在 Run Snapshot 中保存 Memory 子状态和计数；记忆正文可能作为实际模型请求的一部分出现在 Trace 中。Trace 含未脱敏原文，当前没有自动轮转、保留期或脱敏机制。完整格式和写入时机见 [`docs/conversation-and-trace.md`](docs/conversation-and-trace.md)。
 
 
 ## Harness
@@ -275,9 +378,9 @@ go run ./cmd/overview -addr 127.0.0.1:8091 -workspace .
 
 ## 路线图
 
-已完成：M1 项目骨架、M2 MessageBus、M3 AgentLoop + AgentRunner、M4 CLI、M5 EchoProvider、M6 OpenAI-compatible Provider、M8 Session 存储、M9 Tool 接口、M10 多轮 tool calling、M10.5 Docker 工具沙盒、M10.6 通用工具、M11 HTTP + SSE Web。
+已完成：M1 项目骨架、M2 MessageBus、M3 AgentLoop + AgentRunner、M4 CLI、M5 EchoProvider、M6 OpenAI-compatible Provider、M8 Session 存储、M9 Tool 接口、M10 多轮 tool calling、M10.5 Docker 工具沙盒、M10.6 通用工具、M11 HTTP + SSE Web、M12.1 SQLite + FTS5 用户记忆存储和上下文注入。
 
-待办：M7 配置加载（`~/.szabot/config.json`）、M12 长期记忆（`MEMORY.md`）。
+待办：M7 配置加载（`~/.szabot/config.json`）、M12.4 Qdrant 查询侧混合召回、M12.5 用户侧记忆查看/纠正/删除入口、M12.6 冲突记忆的自动版本化策略。
 
 ## 已知问题
 

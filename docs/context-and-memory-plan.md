@@ -80,21 +80,23 @@ Inbound
 
 ### M4：结构化长期 Memory
 
-- [ ] 定义统一 `Memory` 模型：`id`、`session/user scope`、`kind`、`content`、`source`、`confidence`、`importance`、`created_at`、`updated_at`、`expires_at`。
-- [ ] 首批支持三类记忆：`fact`（稳定事实）、`episode`（过去事件）、`preference`（用户偏好）。
-- [ ] 新增 `MemoryStore` 接口，支持 upsert、search、delete、list 和按 scope 隔离。
-- [ ] 第一版优先使用 SQLite + FTS/关键词检索，不先引入独立向量数据库。
-- [ ] 检索结果必须带来源、时间和置信度，便于模型判断是否采用。
-- [ ] 支持用户显式写入、纠正和删除记忆。
-- [ ] 对敏感信息设置默认不写入或需要确认的策略。
+- [x] 定义统一 `Memory` 模型：`id`、`session/user scope`、`kind`、`content`、`source`、`confidence`、`importance`、`created_at`、`updated_at`、`expires_at`。
+- [x] 首批支持三类记忆：`fact`（稳定事实）、`episode`（过去事件）、`preference`（用户偏好）。
+- [x] 新增 `MemoryStore` 接口，支持 upsert、search、delete、list 和按 scope 隔离。
+- [x] 使用 SQLite 保存当前记忆、变更历史和 FTS5 关键词索引。
+- [x] 接入可配置的 `EmbeddingProvider` 和 Qdrant 派生索引；Qdrant 不作为唯一事实源。
+- [ ] 记录 embedding 模型、版本、维度和索引状态，支持失败重试和全量重建。
+- [x] 检索结果必须带来源、时间和置信度，便于模型判断是否采用。
+- [x] 支持通过 `MemoryStore` API 显式写入、纠正和删除记忆；CLI/API 用户入口待后续补齐。
+- [x] 对敏感信息设置默认不写入或需要确认的策略。
 
 验收：新会话能检索到明确授权的稳定事实；不同用户和 session 之间没有记忆串线。
 
 ### M5：记忆提取与写入治理
 
-- [ ] 在 Run 成功后异步提取 memory candidates，不阻塞用户看到最终答案。
-- [ ] 只写入稳定、可复用且有足够置信度的信息。
-- [ ] 为候选记忆保留来源 Run、原文证据和提取原因。
+- [x] 在 Run 成功后异步提取 memory candidates，不阻塞用户看到最终答案。
+- [x] 只写入稳定、可复用且有足够置信度的信息。
+- [x] 为候选记忆保留来源 Run、原文证据和提取原因。
 - [ ] 对冲突事实执行版本化或标记待确认，不能静默覆盖。
 - [ ] 增加 recency、importance、confidence 的排序和淘汰策略。
 - [ ] 支持 TTL、定期清理和按用户请求的完整删除。
@@ -104,9 +106,10 @@ Inbound
 
 ### M6：可观测性、恢复与评测
 
-- [ ] Trace 增加 context build、compaction、memory retrieval、memory write 事件。
+- [x] Trace 增加 context build、compaction、memory retrieval、memory context injection、memory extraction、policy、write 和 index 事件；Run Snapshot 保存 Memory 子状态。
 - [ ] 记录上下文 token、压缩前后消息数、检索命中数、写入/拒绝数量和耗时。
 - [ ] 进程重启后能恢复 summary、memory index 和 artifact metadata。
+- [ ] Qdrant 不可用时可降级到 SQLite FTS5；索引损坏时可从 SQLite 重建。
 - [ ] 处理 JSONL/SQLite 尾部半写入、索引损坏和摘要版本升级。
 - [ ] 增加 deterministic provider 场景，断言每轮完整 messages。
 - [ ] 增加长会话、跨会话事实、冲突记忆、删除记忆、超大工具结果和并发 session 测试。

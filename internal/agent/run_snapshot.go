@@ -14,18 +14,19 @@ import (
 // RunSnapshot is the durable, task-level state needed for inspection and
 // conservative restart handling. Conversation messages remain in SessionStore.
 type RunSnapshot struct {
-	ID           string    `json:"run_id"`
-	SessionID    string    `json:"session_id"`
-	AgentID      string    `json:"agent_id"`
-	Status       RunStatus `json:"status"`
-	StatusReason string    `json:"status_reason,omitempty"`
-	Error        string    `json:"error,omitempty"`
-	Budget       RunBudget `json:"budget,omitempty"`
-	Usage        RunUsage  `json:"usage"`
-	QueuedAt     time.Time `json:"queued_at"`
-	StartedAt    time.Time `json:"started_at,omitempty"`
-	FinishedAt   time.Time `json:"finished_at,omitempty"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           string         `json:"run_id"`
+	SessionID    string         `json:"session_id"`
+	AgentID      string         `json:"agent_id"`
+	Status       RunStatus      `json:"status"`
+	StatusReason string         `json:"status_reason,omitempty"`
+	Error        string         `json:"error,omitempty"`
+	Budget       RunBudget      `json:"budget,omitempty"`
+	Usage        RunUsage       `json:"usage"`
+	QueuedAt     time.Time      `json:"queued_at"`
+	StartedAt    time.Time      `json:"started_at,omitempty"`
+	FinishedAt   time.Time      `json:"finished_at,omitempty"`
+	Memory       MemoryRunState `json:"memory"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 // Snapshot returns a consistent copy of the Run's durable fields.
@@ -36,7 +37,7 @@ func (r *Run) Snapshot() RunSnapshot {
 		ID: r.ID, SessionID: r.SessionID, AgentID: r.AgentID,
 		Status: r.Status, StatusReason: r.StatusReason, Error: r.Error,
 		Budget: r.Budget, Usage: r.Usage, QueuedAt: r.QueuedAt,
-		StartedAt: r.StartedAt, FinishedAt: r.FinishedAt, UpdatedAt: time.Now(),
+		StartedAt: r.StartedAt, FinishedAt: r.FinishedAt, Memory: r.Memory, UpdatedAt: time.Now(),
 	}
 }
 
