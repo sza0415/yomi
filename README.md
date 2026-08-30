@@ -263,6 +263,47 @@ export SZABOT_EMBEDDING_API_KEY=your-embedding-key
 export SZABOT_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
+这里的 Embedding 模型只负责把查询和记忆转换成向量，例如 `BAAI/bge-m3`；它不是
+Cross-Encoder 重排模型。配置 Embedding 后，Yomi 会并行执行 SQLite FTS5/BM25 关键词召回
+和 Qdrant 向量召回，用 RRF 合并结果，再回查 SQLite 的用户、状态和有效期。
+
+Cross-Encoder/Reranker 是可选的第三阶段：它接收查询和混合召回候选，逐条做更精确的交互
+打分。目前代码已经提供可插拔的 `Reranker` 接口和 HTTP 适配器；只有配置模型后才会
+调用重排模型。可以接入硅基流动或其他
+提供 `/rerank` 接口的兼容服务，例如 BGE Reranker 系列。Reranker 需要单独的模型，不能
+直接复用 `BAAI/bge-m3` 的 embedding 结果：
+
+```bash
+# 设置模型名后默认启用；也可以显式设置 SZABOT_RERANKER_ENABLED=on/off
+export SZABOT_RERANKER_MODEL=BAAI/bge-reranker-v2-m3
+export SZABOT_RERANKER_ENABLED=on
+# 不设置时复用 SZABOT_EMBEDDING_BASE_URL 和 SZABOT_EMBEDDING_API_KEY
+export SZABOT_RERANKER_BASE_URL=https://your-reranker-endpoint/v1
+export SZABOT_RERANKER_API_KEY=your-reranker-key
+export SZABOT_RERANKER_TOP_N=20
+```
+
+当前适配器发送 `model/query/documents/top_n`，读取带候选下标的 `results`，因此服务端需要
+兼容常见 rerank API 的请求和响应格式。Reranker 只在 Qdrant + FTS5 混合召回已经启用时
+执行；模型未配置、服务不可用或返回错误时，Yomi 保留 RRF 排序并记录降级原因。
+
+启动时会打印记忆运行状态，API key 只显示 `configured`/`missing`，不会输出凭证内容：
+
+```text
+memory.db=... sqlite_fts5=enabled extraction=enabled extraction_timeout=30s
+memory.layers=profile(fact,preference):limit=4 episode(episode):limit=4
+memory.embedding.base_url=... model=BAAI/bge-m3 api_key=configured
+memory.retrieval=hybrid=enabled reason=fts_bm25_plus_qdrant_rrf
+memory.reranker.base_url=... model=... api_key=configured enabled=enabled
+memory.reranker=requested=enabled enabled=enabled top_n=20 endpoint=/rerank
+memory.qdrant.url=... collection=yomi_memories auto_start=enabled ready=enabled index=enabled
+memory.qdrant.index_reason=enabled
+```
+
+如果看到 `hybrid=disabled` 或 `reranker=requested=enabled enabled=disabled`，同时查看
+`memory.qdrant.index_reason` 和启动警告；常见原因是 Qdrant 未就绪、Embedding 配置不完整，
+或 Reranker 缺少独立的 model/base URL/API key。日志不会打印 API key 的实际值。
+
 `SZABOT_QDRANT_URL` 可以省略，默认值是 `http://127.0.0.1:6333`。只有在使用远程
 Qdrant 时才需要显式填写 URL。
 
@@ -274,6 +315,13 @@ Qdrant 时才需要显式填写 URL。
 ```bash
 docker pull qdrant/qdrant:latest
 ```
+
+#### Qdrant Web UI
+
+本地 Qdrant 服务运行后，可打开 [http://localhost:6333/dashboard](http://localhost:6333/dashboard)
+使用官方 Web UI 查看和搜索 Collections、检查数据点、管理 Snapshots，并通过 Console
+调试 REST API。该界面只在 Qdrant 服务可访问时可用；远程 Qdrant 请将地址替换为对应的
+集群 URL，并追加 `/dashboard`。
 
 远程 Qdrant 不由 Yomi 管理。生产环境或已有容器编排时可关闭自动管理：
 
@@ -290,11 +338,13 @@ export SZABOT_QDRANT_AUTO_START=off
 Session 默认不会共享记忆。
 
 当前已支持 Run 完成后的异步候选提取、敏感信息策略过滤、重复候选去重、SQLite 写入、
-Embedding 生成和可选 Qdrant 派生索引。Qdrant 暂不参与查询侧混合召回，当前查询仍由
-SQLite FTS5 完成；用户侧 `memory list / correct / forget` 入口也尚未完成。完整设计、
+Embedding 生成、SQLite FTS5/BM25 + Qdrant 的混合召回和 HTTP Reranker 适配。用户侧
+`memory list / correct / forget` 入口仍尚未完成。完整设计、
 数据模型和后续路线见
 [`docs/user-memory-v1-design.md`](docs/user-memory-v1-design.md) 与
-[`docs/context-and-memory-plan.md`](docs/context-and-memory-plan.md)。
+[`docs/context-and-memory-plan.md`](docs/context-and-memory-plan.md)。当前实现链路（启动配置、
+分层召回、Qdrant、RRF、Reranker 和 Trace）见
+[`docs/memory-hybrid-reranker-flow.md`](docs/memory-hybrid-reranker-flow.md)。
 
 每个 Run 的 JSON 快照还会记录 Memory 子状态：`pending`、`running`、`completed` 或
 `failed`，以及候选数、拒绝数、写入数、索引数和错误信息。Memory 事件会继续追加到同一个
@@ -380,7 +430,8 @@ go run ./cmd/overview -addr 127.0.0.1:8091 -workspace .
 
 已完成：M1 项目骨架、M2 MessageBus、M3 AgentLoop + AgentRunner、M4 CLI、M5 EchoProvider、M6 OpenAI-compatible Provider、M8 Session 存储、M9 Tool 接口、M10 多轮 tool calling、M10.5 Docker 工具沙盒、M10.6 通用工具、M11 HTTP + SSE Web、M12.1 SQLite + FTS5 用户记忆存储和上下文注入。
 
-待办：M7 配置加载（`~/.szabot/config.json`）、M12.4 Qdrant 查询侧混合召回、M12.5 用户侧记忆查看/纠正/删除入口、M12.6 冲突记忆的自动版本化策略。
+待办：M7 配置加载（`~/.szabot/config.json`）、M12.4 Reranker 模型兼容性验证和重排质量评测、
+M12.5 用户侧记忆查看/纠正/删除入口、M12.6 冲突记忆的自动版本化策略。
 
 ## 已知问题
 

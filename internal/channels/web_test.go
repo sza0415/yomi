@@ -13,6 +13,7 @@ import (
 
 	"github.com/ziangsun/szabot/internal/agent"
 	"github.com/ziangsun/szabot/internal/bus"
+	"github.com/ziangsun/szabot/internal/providers"
 	tracing "github.com/ziangsun/szabot/internal/trace"
 )
 
@@ -210,6 +211,30 @@ func TestRunAPIListsSnapshotsAndFiltersStatus(t *testing.T) {
 	w.handleTraceRun(detailRec, detailReq)
 	if detailRec.Code != http.StatusOK || !strings.Contains(detailRec.Body.String(), "user requested cancellation") {
 		t.Fatalf("snapshot detail response = %d %s", detailRec.Code, detailRec.Body.String())
+	}
+}
+
+func TestSessionAPIListsAndLoadsHistory(t *testing.T) {
+	store, err := agent.NewSessionStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append("web:history", providers.Message{Role: providers.RoleUser, Content: "第一条问题"}, providers.Message{Role: providers.RoleAssistant, Content: "第一条回答"}); err != nil {
+		t.Fatal(err)
+	}
+	w := newTestWeb(bus.New(16))
+	w.Sessions = store
+
+	listRec := httptest.NewRecorder()
+	w.handleSessions(listRec, httptest.NewRequest(http.MethodGet, "/api/sessions", nil))
+	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), "web:history") || !strings.Contains(listRec.Body.String(), "第一条问题") {
+		t.Fatalf("session list response = %d %s", listRec.Code, listRec.Body.String())
+	}
+
+	historyRec := httptest.NewRecorder()
+	w.handleSessionMessages(historyRec, httptest.NewRequest(http.MethodGet, "/api/session/messages?session=web:history", nil))
+	if historyRec.Code != http.StatusOK || !strings.Contains(historyRec.Body.String(), "第一条回答") {
+		t.Fatalf("session history response = %d %s", historyRec.Code, historyRec.Body.String())
 	}
 }
 

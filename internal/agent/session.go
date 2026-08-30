@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,17 @@ type SessionStore struct {
 
 	mu    sync.Mutex
 	cache map[string][]providers.Message
+}
+
+// SessionInfo is the lightweight metadata used by clients to discover
+// persisted conversations without downloading their full message history.
+type SessionInfo struct {
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	Preview      string    `json:"preview"`
+	MessageCount int       `json:"message_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type sessionSummary struct {
@@ -99,6 +111,79 @@ func (s *SessionStore) Load(sessionID string) ([]providers.Message, error) {
 	}
 	s.cache[sessionID] = history
 	return cloneMessages(history), nil
+}
+
+// ListSessions returns persisted conversations, newest first. The method only
+// exposes metadata; callers must use Load to fetch the actual messages.
+func (s *SessionStore) ListSessions() ([]SessionInfo, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, fmt.Errorf("agent: list sessions: %w", err)
+	}
+	result := make([]SessionInfo, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		sessionID := strings.TrimSuffix(entry.Name(), ".jsonl")
+		if sessionID == "" {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("agent: stat session %q: %w", sessionID, err)
+		}
+		history, err := s.readFile(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		// The JSONL format has no per-message timestamp. File times provide
+		// stable enough ordering for the local session picker.
+		createdAt := info.ModTime()
+		updatedAt := info.ModTime()
+		result = append(result, SessionInfo{
+			ID:           sessionID,
+			Title:        sessionTitle(history, sessionID),
+			Preview:      sessionPreview(history),
+			MessageCount: len(history),
+			CreatedAt:    createdAt,
+			UpdatedAt:    updatedAt,
+		})
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].UpdatedAt.After(result[j].UpdatedAt)
+	})
+	return result, nil
+}
+
+func sessionTitle(history []providers.Message, fallback string) string {
+	for _, msg := range history {
+		if msg.Role == providers.RoleUser && strings.TrimSpace(msg.Content) != "" {
+			return truncateSessionText(strings.TrimSpace(msg.Content), 42)
+		}
+	}
+	return fallback
+}
+
+func sessionPreview(history []providers.Message) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		msg := history[i]
+		if (msg.Role == providers.RoleAssistant || msg.Role == providers.RoleUser) && strings.TrimSpace(msg.Content) != "" {
+			return truncateSessionText(strings.TrimSpace(msg.Content), 80)
+		}
+	}
+	return "暂无消息"
+}
+
+func truncateSessionText(text string, max int) string {
+	runes := []rune(text)
+	if len(runes) <= max {
+		return text
+	}
+	return string(runes[:max]) + "…"
 }
 
 // Append 把若干条消息追加到某个 session（内存缓存 + 磁盘各追加一份）。

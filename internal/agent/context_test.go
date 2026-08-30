@@ -98,3 +98,33 @@ func TestContextManagerInjectsScopedMemory(t *testing.T) {
 		t.Fatalf("unscoped memory = %#v count=%d", withoutUser.Messages, withoutUser.MemoryCount)
 	}
 }
+
+type layeredMemoryStore struct{}
+
+func (layeredMemoryStore) Search(_ context.Context, query memory.Query) ([]memory.Memory, error) {
+	if len(query.Kinds) == 1 && query.Kinds[0] == memory.KindEpisode {
+		return []memory.Memory{{ID: "episode-1", UserID: query.UserID, Kind: memory.KindEpisode, Content: "用户昨天确认了东京行程", Confidence: 0.8}}, nil
+	}
+	return []memory.Memory{{ID: "profile-1", UserID: query.UserID, Kind: memory.KindPreference, Content: "用户偏好中文回答", Confidence: 0.9}}, nil
+}
+func (layeredMemoryStore) Upsert(context.Context, memory.Memory) error { return nil }
+func (layeredMemoryStore) Get(context.Context, string, string) (memory.Memory, error) {
+	return memory.Memory{}, nil
+}
+func (layeredMemoryStore) List(context.Context, string) ([]memory.Memory, error) { return nil, nil }
+func (layeredMemoryStore) Delete(context.Context, string, string, string) error  { return nil }
+func (layeredMemoryStore) Rebuild(context.Context, string) error                 { return nil }
+
+func TestContextManagerRetrievesProfileBeforeEpisode(t *testing.T) {
+	m := &ContextManager{Memory: layeredMemoryStore{}}
+	got, err := m.BuildForUser(context.Background(), "alice", "session-1", "SYS", providers.Message{Role: providers.RoleUser, Content: "东京行程用什么语言记录？"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MemoryProfileCount != 1 || got.MemoryEpisodeCount != 1 || len(got.MemoryIDs) != 2 {
+		t.Fatalf("layer counts = profile:%d episode:%d ids:%v", got.MemoryProfileCount, got.MemoryEpisodeCount, got.MemoryIDs)
+	}
+	if !strings.Contains(got.Messages[1].Content, "profile") || !strings.Contains(got.Messages[1].Content, "episode") {
+		t.Fatalf("layered memory context = %q", got.Messages[1].Content)
+	}
+}

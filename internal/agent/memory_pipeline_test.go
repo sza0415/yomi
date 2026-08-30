@@ -27,14 +27,18 @@ func (pipelineEmbedder) Embed(context.Context, []string) ([][]float32, error) {
 }
 
 type pipelineIndexer struct {
-	records []memory.VectorRecord
+	records    []memory.VectorRecord
+	deletedIDs []string
 }
 
 func (i *pipelineIndexer) Upsert(_ context.Context, records []memory.VectorRecord) error {
 	i.records = append(i.records, records...)
 	return nil
 }
-func (i *pipelineIndexer) Delete(context.Context, []string) error { return nil }
+func (i *pipelineIndexer) Delete(_ context.Context, ids []string) error {
+	i.deletedIDs = append(i.deletedIDs, ids...)
+	return nil
+}
 
 func TestMemoryPipelineExtractsWritesAndIndexes(t *testing.T) {
 	store, err := memory.NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
@@ -96,5 +100,41 @@ func TestMemoryPipelineDoesNotWriteRejectedCandidate(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("sensitive memories = %#v", got)
+	}
+}
+
+func TestMemoryPipelineSupersedesExplicitReplacement(t *testing.T) {
+	store, err := memory.NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Upsert(context.Background(), memory.Memory{
+		ID: "mem-old", UserID: "alice", Kind: memory.KindFact, Subject: "self",
+		Attribute: "home_city", Value: "北京", Content: "用户住在北京", Status: memory.StatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	indexer := &pipelineIndexer{}
+	loop := &Loop{
+		Memory: store,
+		MemoryExtractor: pipelineExtractor{candidates: []memory.Candidate{{
+			Kind: memory.KindFact, Subject: "self", Attribute: "home_city", Value: "上海",
+			Content: "用户已搬到上海", ChangeHint: memory.ChangeHintReplace,
+			Confidence: 0.95, Importance: 0.9,
+		}}},
+		MemoryEmbedder: pipelineEmbedder{}, MemoryIndexer: indexer, Trace: tracing.NoopSink{},
+	}
+	loop.extractAndStoreMemory(context.Background(), NewRun("session-1", RunBudget{}), bus.InboundMessage{UserID: "alice", SessionID: "session-1", Text: "我搬到上海了"}, "好的")
+	old, err := store.Get(context.Background(), "alice", "mem-old")
+	if err != nil || old.Status != memory.StatusSuperseded {
+		t.Fatalf("old memory = %#v, err=%v", old, err)
+	}
+	got, err := store.Search(context.Background(), memory.Query{UserID: "alice", Text: "上海", Limit: 8})
+	if err != nil || len(got) != 1 || got[0].Status != memory.StatusActive {
+		t.Fatalf("new memories = %#v, err=%v", got, err)
+	}
+	if len(indexer.deletedIDs) != 1 || indexer.deletedIDs[0] != "mem-old" {
+		t.Fatalf("deleted index IDs = %#v", indexer.deletedIDs)
 	}
 }

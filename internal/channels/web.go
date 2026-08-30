@@ -50,6 +50,8 @@ type WebChannel struct {
 	Trace tracing.Reader
 	// Snapshots 提供跨 Run 的任务摘要查询，包含没有完整 Trace 的中断 Run。
 	Snapshots RunSnapshotReader
+	// Sessions 提供 Web 会话列表和历史回放。对话写入仍由 Agent Loop 负责。
+	Sessions *agent.SessionStore
 
 	// Addr 是 HTTP 监听地址，如 ":8080"。默认 ":8080"。
 	Addr string
@@ -113,6 +115,8 @@ func (w *WebChannel) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/traces", w.handleTraces)
 	mux.HandleFunc("/api/traces/run", w.handleTraceRun)
 	mux.HandleFunc("/api/runs", w.handleRuns)
+	mux.HandleFunc("/api/sessions", w.handleSessions)
+	mux.HandleFunc("/api/session/messages", w.handleSessionMessages)
 
 	server := &http.Server{Addr: w.Addr, Handler: mux}
 
@@ -263,6 +267,51 @@ type runSummaryView struct {
 func writeJSON(rw http.ResponseWriter, value any) {
 	rw.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(rw).Encode(value)
+}
+
+// handleSessions lists persisted Web/CLI conversations. Session IDs are
+// intentionally returned as opaque values; the browser sends them back when
+// selecting a conversation.
+func (w *WebChannel) handleSessions(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if w.Sessions == nil {
+		http.Error(rw, "session store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	sessions, err := w.Sessions.ListSessions()
+	if err != nil {
+		http.Error(rw, "list sessions failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(rw, map[string]any{"sessions": sessions})
+}
+
+// handleSessionMessages returns Conversation history without the system
+// prompt. Trace/reasoning events are not synthesized here; this endpoint is
+// deliberately limited to messages that can be sent back to the provider.
+func (w *WebChannel) handleSessionMessages(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if w.Sessions == nil {
+		http.Error(rw, "session store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	sessionID := strings.TrimSpace(r.URL.Query().Get("session"))
+	if sessionID == "" {
+		http.Error(rw, "missing session", http.StatusBadRequest)
+		return
+	}
+	history, err := w.Sessions.Load(sessionID)
+	if err != nil {
+		http.Error(rw, "load session failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(rw, map[string]any{"session_id": sessionID, "messages": history})
 }
 
 // handleTraces 返回一个 Session 下按 Run 分组的 Trace 摘要。

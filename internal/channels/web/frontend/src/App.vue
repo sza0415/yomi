@@ -21,11 +21,22 @@ onMounted(() => {
         <button class="view-tab active" id="chatTab">聊天</button>
         <button class="view-tab" id="traceTab">Trace</button>
       </div>
+      <button class="session-toggle" id="sessionToggle" title="显示会话">会话</button>
       <div class="header-meta">
         <span class="model-chip">Local Agent</span>
         <span class="status" id="status">连接中…</span>
       </div>
     </header>
+
+    <aside class="session-sidebar" id="sessionSidebar">
+      <div class="sidebar-heading">
+        <span>历史会话</span>
+        <button class="new-session" id="newSession" title="新建会话">+</button>
+      </div>
+      <div class="session-list" id="sessionList">
+        <div class="session-list-status">加载会话中…</div>
+      </div>
+    </aside>
 
     <div id="messages">
       <div class="wrap" id="list">

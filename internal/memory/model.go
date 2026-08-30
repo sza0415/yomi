@@ -19,6 +19,10 @@ const (
 	EventSupersede = "supersede"
 	EventConflict  = "conflict"
 	EventDelete    = "delete"
+
+	ChangeHintReplace = "replace"
+	ChangeHintCoexist = "coexist"
+	ChangeHintUnknown = "unknown"
 )
 
 // Memory is the canonical user-scoped record. Search indexes are derived from
@@ -28,6 +32,8 @@ type Memory struct {
 	UserID           string    `json:"user_id"`
 	Kind             string    `json:"kind"`
 	Subject          string    `json:"subject,omitempty"`
+	Attribute        string    `json:"attribute,omitempty"`
+	Value            string    `json:"value,omitempty"`
 	Content          string    `json:"content"`
 	Status           string    `json:"status"`
 	SourceRunID      string    `json:"source_run_id,omitempty"`
@@ -51,6 +57,9 @@ type Query struct {
 	Text             string
 	Limit            int
 	IncludeConflicts bool
+	// Kinds optionally restricts retrieval to a set of memory kinds. An empty
+	// list preserves the historical all-kinds behavior.
+	Kinds []string
 }
 
 type Event struct {
@@ -61,6 +70,16 @@ type Event struct {
 	Memory    Memory    `json:"memory"`
 	Reason    string    `json:"reason,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// Mutation applies one candidate and any related state transitions as a
+// single source-of-truth transaction. Derived vector indexes are updated only
+// after this transaction commits.
+type Mutation struct {
+	Memory       Memory
+	SupersedeIDs []string
+	ConflictIDs  []string
+	Reason       string
 }
 
 type Store interface {
@@ -76,4 +95,39 @@ type Store interface {
 // the status of a derived embedding index without changing memory content.
 type IndexStateStore interface {
 	MarkIndexed(ctx context.Context, userID, memoryID, status, model, version string, dimension int) error
+}
+
+// RelatedStore is an optional extension used by the conflict resolver to find
+// memories that occupy the same structured subject/attribute slot.
+type RelatedStore interface {
+	FindRelated(ctx context.Context, userID, kind, subject, attribute string) ([]Memory, error)
+}
+
+// MutationStore is an optional extension that can apply a candidate and its
+// related state transitions atomically.
+type MutationStore interface {
+	ApplyMutation(ctx context.Context, mutation Mutation) error
+}
+
+type SearchStats struct {
+	LexicalCount      int    `json:"lexical_count"`
+	SemanticCount     int    `json:"semantic_count"`
+	FusedCount        int    `json:"fused_count"`
+	SemanticAttempted bool   `json:"semantic_attempted"`
+	SemanticFallback  bool   `json:"semantic_fallback"`
+	SemanticError     string `json:"semantic_error,omitempty"`
+	RerankAttempted   bool   `json:"rerank_attempted"`
+	RerankFallback    bool   `json:"rerank_fallback"`
+	RerankError       string `json:"rerank_error,omitempty"`
+}
+
+type SearchResult struct {
+	Memories []Memory
+	Stats    SearchStats
+}
+
+// DetailedStore is an optional read extension used for layered retrieval and
+// fine-grained observability. Store.Search remains the compatibility API.
+type DetailedStore interface {
+	SearchDetailed(ctx context.Context, query Query) (SearchResult, error)
 }
