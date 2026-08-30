@@ -316,6 +316,10 @@ Qdrant 时才需要显式填写 URL。
 docker pull qdrant/qdrant:latest
 ```
 
+收到 `SIGINT`/`SIGTERM` 关闭 yomi 时，如果本次启动是 yomi 创建或启动了 `yomi-qdrant`，
+yomi 会在退出前停止该容器；如果容器在 yomi 启动前就已经处于运行状态，则不会停止它，
+避免影响外部 Docker 编排或其他使用者。
+
 #### Qdrant Web UI
 
 本地 Qdrant 服务运行后，可打开 [http://localhost:6333/dashboard](http://localhost:6333/dashboard)
