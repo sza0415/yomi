@@ -20,6 +20,7 @@
 以下文档记录实现过程中的方案、问题和取舍。它们中的“改动前”“未来”“规划”
 描述的是对应文档产生时的状态，若与代码冲突，以代码为准：
 
+- [`user-memory-v1-design.md`](user-memory-v1-design.md)：Yomi 用户级长期记忆第一版设计稿，包含数据模型、读写路径、存储、隐私和验收标准。
 - `session-and-streaming.md`
 - `reasoning-and-tool-events.md`
 - `tools-integration-flow.md`

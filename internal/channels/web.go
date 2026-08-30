@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"strings"
@@ -16,11 +17,12 @@ import (
 	tracing "github.com/ziangsun/szabot/internal/trace"
 )
 
-// webIndex 把前端单页 HTML 直接嵌进二进制里，
-// 这样 szabot 依然是"一个可执行文件、零外部资源"，跟设计宪法一致。
+// webDist 把 Vite 构建后的前端资源嵌进二进制里，
+// 这样 yomi 依然是"一个可执行文件、零外部资源"。
 //
-//go:embed web/index.html
-var webIndex embed.FS
+//go:generate sh -c "cd web/frontend && npm install && npm run build"
+//go:embed web/dist
+var webDist embed.FS
 
 // WebChannel 是基于 HTTP 的 channel：浏览器通过它跟 agent 对话。
 //
@@ -100,7 +102,11 @@ func (w *WebChannel) Start(ctx context.Context) error {
 	go w.dispatch(ctx)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", w.handleIndex)
+	distFS, err := fs.Sub(webDist, "web/dist")
+	if err != nil {
+		return fmt.Errorf("prepare web assets: %w", err)
+	}
+	mux.Handle("/", http.FileServer(http.FS(distFS)))
 	mux.HandleFunc("/api/send", w.handleSend(ctx))
 	mux.HandleFunc("/api/cancel", w.handleCancel)
 	mux.HandleFunc("/api/stream", w.handleStream)
@@ -194,13 +200,13 @@ func (w *WebChannel) removeSubscriber(s *subscriber) {
 	delete(w.subscribers, s.sessionID)
 }
 
-// handleIndex 返回内嵌的前端页面。
+// handleIndex 返回内嵌的前端入口。保留该方法供轻量 handler 测试和嵌入式调用使用。
 func (w *WebChannel) handleIndex(rw http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(rw, r)
 		return
 	}
-	data, err := webIndex.ReadFile("web/index.html")
+	data, err := webDist.ReadFile("web/dist/index.html")
 	if err != nil {
 		http.Error(rw, "index not found", http.StatusInternalServerError)
 		return

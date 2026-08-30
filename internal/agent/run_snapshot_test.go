@@ -75,3 +75,22 @@ func TestJSONRunSnapshotStoreMarkInterrupted(t *testing.T) {
 		t.Fatal("snapshot updated time is in the future")
 	}
 }
+
+func TestRunSnapshotPersistsMemoryState(t *testing.T) {
+	store, err := NewJSONRunSnapshotStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := NewRun("memory", RunBudget{})
+	run.setMemoryState(MemoryRunState{Status: "completed", CandidateCount: 3, WrittenCount: 2, IndexedCount: 2})
+	if err := store.Save(run.Snapshot()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Load(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Memory.Status != "completed" || got.Memory.CandidateCount != 3 || got.Memory.WrittenCount != 2 || got.Memory.IndexedCount != 2 {
+		t.Fatalf("memory state = %#v", got.Memory)
+	}
+}

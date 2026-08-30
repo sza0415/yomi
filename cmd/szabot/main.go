@@ -14,6 +14,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 	"github.com/ziangsun/szabot/internal/agent"
 	"github.com/ziangsun/szabot/internal/bus"
 	"github.com/ziangsun/szabot/internal/channels"
+	"github.com/ziangsun/szabot/internal/memory"
 	"github.com/ziangsun/szabot/internal/providers"
 	"github.com/ziangsun/szabot/internal/skills"
 	"github.com/ziangsun/szabot/internal/tools"
@@ -90,6 +92,49 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: init session store: %v\n", err)
 		os.Exit(1)
 	}
+	memoryStore, err := memory.NewSQLiteStore(filepath.Join(rootDir, "memories", "memory.db"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: init memory store: %v\n", err)
+		os.Exit(1)
+	}
+	defer memoryStore.Close()
+	var memoryExtractor memory.Extractor
+	if memoryExtractionEnabled(provider) {
+		memoryExtractor = &memory.LLMExtractor{Provider: provider, Model: model}
+	}
+	var memoryEmbedder memory.EmbeddingProvider
+	var memoryIndexer memory.Indexer
+	qdrantEnabled := qdrantEnabledByConfig()
+	qdrantURL := strings.TrimSpace(os.Getenv("SZABOT_QDRANT_URL"))
+	if qdrantEnabled && qdrantURL == "" {
+		qdrantURL = "http://127.0.0.1:6333"
+	}
+	qdrantCollection := envOr("SZABOT_QDRANT_COLLECTION", "yomi_memories")
+	embeddingBaseURL := envOr("SZABOT_EMBEDDING_BASE_URL", os.Getenv("DEEPSEEK_BASE_URL"))
+	embeddingAPIKey := envOr("SZABOT_EMBEDDING_API_KEY", os.Getenv("DEEPSEEK_API_KEY"))
+	embeddingModel := strings.TrimSpace(os.Getenv("SZABOT_EMBEDDING_MODEL"))
+	qdrantReady := false
+	if qdrantEnabled && qdrantURL != "" {
+		qdrantReady = true
+		if qdrantAutoStartEnabled(qdrantURL) {
+			qdrantCtx, qdrantCancel := context.WithTimeout(ctx, 30*time.Second)
+			if err := memory.EnsureLocalQdrant(qdrantCtx, qdrantURL); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: Qdrant auto-start failed; semantic memory indexing disabled: %v\n", err)
+				qdrantReady = false
+			}
+			qdrantCancel()
+		}
+		if embeddingBaseURL == "" || embeddingAPIKey == "" || embeddingModel == "" {
+			fmt.Fprintln(os.Stderr, "warning: Qdrant configured but embedding settings are incomplete; semantic memory indexing disabled")
+		} else if !qdrantReady {
+			// Keep the SQLite memory path available after a local Docker failure.
+		} else if indexer, indexErr := memory.NewQdrantIndexer(memory.QdrantConfig{BaseURL: qdrantURL, Collection: qdrantCollection}); indexErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: disable Qdrant memory index: %v\n", indexErr)
+		} else {
+			memoryEmbedder = &memory.OpenAIEmbeddingProvider{BaseURL: embeddingBaseURL, APIKey: embeddingAPIKey, ModelName: embeddingModel}
+			memoryIndexer = indexer
+		}
+	}
 	artifactStore, err := tools.NewArtifactStore(filepath.Join(rootDir, "artifacts"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: init artifact store: %v\n", err)
@@ -137,12 +182,31 @@ func main() {
 			SummaryTimeout:   summaryTimeout,
 			ContextBudget:    contextBudget,
 			Tools:            registry,
+			Memory:           memoryStore,
 		},
-		RunTimeout: runTimeout,
-		Budget:     budget,
+		Memory:          memoryStore,
+		MemoryExtractor: memoryExtractor,
+		MemoryEmbedder:  memoryEmbedder,
+		MemoryIndexer:   memoryIndexer,
+		MemoryTimeout:   envDuration("SZABOT_MEMORY_TIMEOUT", 30*time.Second),
+		RunTimeout:      runTimeout,
+		Budget:          budget,
 	}
 	loop.Start(ctx)
-	printRuntimeConfig(provider, model, workspace, rootDir, contextMaxTokens, contextRecentMessages, summaryTimeout, runTimeout, budget)
+	printRuntimeConfig(provider, model, workspace, rootDir, contextMaxTokens, contextRecentMessages, summaryTimeout, runTimeout, budget, memoryRuntimeConfig{
+		DBPath:              filepath.Join(rootDir, "memories", "memory.db"),
+		ExtractionEnabled:   memoryExtractor != nil,
+		ExtractionTimeout:   envDuration("SZABOT_MEMORY_TIMEOUT", 30*time.Second),
+		QdrantURL:           qdrantURL,
+		QdrantEnabled:       qdrantEnabled,
+		QdrantCollection:    qdrantCollection,
+		QdrantAutoStart:     qdrantAutoStartEnabled(qdrantURL),
+		QdrantReady:         qdrantReady,
+		QdrantIndexEnabled:  memoryIndexer != nil && memoryEmbedder != nil,
+		EmbeddingBaseURL:    embeddingBaseURL,
+		EmbeddingModel:      embeddingModel,
+		EmbeddingKeyPresent: embeddingAPIKey != "",
+	})
 
 	// 4. 选择前端 channel。
 	//
@@ -185,7 +249,22 @@ func main() {
 	fmt.Println("\nyomi stopped.")
 }
 
-func printRuntimeConfig(provider providers.Provider, model, workspace, sessionRoot string, maxContextTokens, recentMessages int, summaryTimeout, runTimeout time.Duration, budget agent.RunBudget) {
+type memoryRuntimeConfig struct {
+	DBPath              string
+	ExtractionEnabled   bool
+	ExtractionTimeout   time.Duration
+	QdrantEnabled       bool
+	QdrantURL           string
+	QdrantCollection    string
+	QdrantAutoStart     bool
+	QdrantReady         bool
+	QdrantIndexEnabled  bool
+	EmbeddingBaseURL    string
+	EmbeddingModel      string
+	EmbeddingKeyPresent bool
+}
+
+func printRuntimeConfig(provider providers.Provider, model, workspace, sessionRoot string, maxContextTokens, recentMessages int, summaryTimeout, runTimeout time.Duration, budget agent.RunBudget, memoryConfig memoryRuntimeConfig) {
 	fmt.Println("yomi configuration:")
 	fmt.Printf("  provider=%s model=%s workspace=%s\n", provider.Name(), model, workspace)
 	fmt.Printf("  session_dir=%s\n", sessionRoot)
@@ -195,6 +274,39 @@ func printRuntimeConfig(provider providers.Provider, model, workspace, sessionRo
 	fmt.Printf("  budget.input_tokens=%s output_tokens=%s total_tokens=%s model_calls=%s tool_calls=%s\n",
 		limitText(budget.MaxInputTokens), limitText(budget.MaxOutputTokens), limitText(budget.MaxTotalTokens), limitText(budget.MaxModelCalls), limitText(budget.MaxToolCalls))
 	fmt.Printf("  permission_mode=%s\n", permissionMode())
+	fmt.Printf("  memory.db=%s sqlite_fts5=enabled extraction=%s extraction_timeout=%s\n",
+		memoryConfig.DBPath, enabledText(memoryConfig.ExtractionEnabled), memoryConfig.ExtractionTimeout)
+	fmt.Printf("  memory.embedding.base_url=%s model=%s api_key=%s\n",
+		valueText(memoryConfig.EmbeddingBaseURL), valueText(memoryConfig.EmbeddingModel), configuredText(memoryConfig.EmbeddingKeyPresent))
+	if !memoryConfig.QdrantEnabled {
+		fmt.Println("  memory.qdrant=disabled auto_start=disabled ready=disabled index=disabled reason=SZABOT_QDRANT_ENABLED=off")
+	} else if memoryConfig.QdrantURL == "" {
+		fmt.Println("  memory.qdrant=disabled auto_start=disabled ready=disabled index=disabled reason=configuration_error")
+	} else {
+		fmt.Printf("  memory.qdrant.url=%s collection=%s auto_start=%s ready=%s index=%s\n",
+			memoryConfig.QdrantURL, memoryConfig.QdrantCollection, enabledText(memoryConfig.QdrantAutoStart), enabledText(memoryConfig.QdrantReady), enabledText(memoryConfig.QdrantIndexEnabled))
+	}
+}
+
+func enabledText(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+func configuredText(configured bool) string {
+	if configured {
+		return "configured"
+	}
+	return "missing"
+}
+
+func valueText(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unset"
+	}
+	return value
 }
 
 func limitText(value int) string {
@@ -403,6 +515,39 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func memoryExtractionEnabled(provider providers.Provider) bool {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("SZABOT_MEMORY_EXTRACTION")))
+	if mode == "off" || mode == "0" || mode == "false" {
+		return false
+	}
+	if mode == "on" || mode == "1" || mode == "true" {
+		return true
+	}
+	return provider != nil && provider.Name() != "echo"
+}
+
+func qdrantAutoStartEnabled(endpoint string) bool {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("SZABOT_QDRANT_AUTO_START")))
+	if mode == "off" || mode == "0" || mode == "false" {
+		return false
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	local := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	if !local {
+		return false
+	}
+	return true
+}
+
+func qdrantEnabledByConfig() bool {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("SZABOT_QDRANT_ENABLED")))
+	return mode != "off" && mode != "0" && mode != "false"
 }
 
 // sessionDir 决定会话历史（jsonl）的落盘目录。
