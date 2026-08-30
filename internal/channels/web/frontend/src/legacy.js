@@ -19,13 +19,18 @@ export function initLegacyController() {
   const traceDetail = document.getElementById("traceDetail");
   const traceStatus = document.getElementById("traceStatus");
   const refreshTrace = document.getElementById("refreshTrace");
+  const sessionList = document.getElementById("sessionList");
+  const newSessionBtn = document.getElementById("newSession");
+  const sessionSidebar = document.getElementById("sessionSidebar");
+  const sessionToggle = document.getElementById("sessionToggle");
 
-  // 会话 ID：优先用 localStorage 里保存的，保证刷新后延续同一 session。
-  let session = localStorage.getItem("szabot_session");
+  // 会话 ID：URL 优先，便于复制链接恢复；localStorage 作为本机默认会话。
+  const urlSession = new URLSearchParams(window.location.search).get("session");
+  let session = urlSession || localStorage.getItem("szabot_session");
   if (!session) {
     session = "web:" + Date.now() + ":" + Math.random().toString(36).slice(2, 8);
-    localStorage.setItem("szabot_session", session);
   }
+  updateSessionURL();
 
   let waiting = false;         // 是否在等待回复（禁用发送）
   let answering = false;       // 是否处于"回答 agent 提问"模式
@@ -33,6 +38,139 @@ export function initLegacyController() {
   let activeOptionBtns = [];   // 当前问题的选项按钮，回答后统一禁用
   let traceRuns = [];
   let traceEvents = [];
+  let eventSource = null;
+  let sessionItems = [];
+
+  function updateSessionURL() {
+    const url = new URL(window.location.href);
+    url.searchParams.set("session", session);
+    window.history.replaceState({}, "", url);
+    localStorage.setItem("szabot_session", session);
+  }
+
+  function resetConversation() {
+    clearPending();
+    list.innerHTML = "";
+    answering = false;
+    waiting = false;
+    activeRun = false;
+    sendBtn.disabled = false;
+    cancelBtn.disabled = true;
+    input.placeholder = "给 szabot 发消息…";
+  }
+
+  function renderHistory(messages) {
+    resetConversation();
+    (messages || []).forEach(function (message) {
+      const content = message.content || "";
+      if (message.role === "user") {
+        if (content) addMessage("user", content);
+        return;
+      }
+      if (message.role === "tool") {
+        if (content) addCollapsibleMessage("tool", content, "工具结果");
+        return;
+      }
+      if (message.role === "assistant") {
+        if (message.reasoning) addCollapsibleMessage("reasoning", message.reasoning, "思考");
+        if (content) addMessage("bot", content);
+        if (message.toolCalls && message.toolCalls.length) {
+          message.toolCalls.forEach(function (call) {
+            const args = typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments || {});
+            addCollapsibleMessage("tool", (call.name || "工具") + "(" + args + ")", "工具调用");
+          });
+        }
+      }
+    });
+    if (!list.children.length) {
+      list.innerHTML = '<section class="empty-state" aria-label="开始对话"><div class="empty-kicker">YOMI AGENT</div><h2>从一个问题开始</h2><p>实时查看模型思考、工具调用和最终回答。</p><div class="empty-pills" aria-hidden="true"><span>流式响应</span><span>工具调用</span><span>Trace 追踪</span></div></section>';
+    }
+  }
+
+  async function loadHistory() {
+    try {
+      const response = await fetch("/api/session/messages?session=" + encodeURIComponent(session));
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const data = await response.json();
+      renderHistory(data.messages || []);
+    } catch (err) {
+      resetConversation();
+      addMessage("bot", "历史加载失败：" + err.message);
+    }
+  }
+
+  function renderSessionList(items) {
+    sessionItems = items || [];
+    sessionList.innerHTML = "";
+    const current = sessionItems.find(function (item) { return item.id === session; });
+    if (!current) {
+      const draft = document.createElement("button");
+      draft.className = "session-item active";
+      draft.innerHTML = '<span class="session-title">当前会话</span><span class="session-preview">尚未发送消息</span>';
+      draft.disabled = waiting;
+      sessionList.appendChild(draft);
+    }
+    sessionItems.forEach(function (item) {
+      const button = document.createElement("button");
+      button.className = "session-item" + (item.id === session ? " active" : "");
+      button.disabled = waiting;
+      const title = document.createElement("span");
+      title.className = "session-title";
+      title.textContent = item.title || item.id;
+      const preview = document.createElement("span");
+      preview.className = "session-preview";
+      preview.textContent = item.preview || "暂无消息";
+      button.appendChild(title);
+      button.appendChild(preview);
+      button.title = item.id;
+      button.addEventListener("click", function () { switchSession(item.id); });
+      sessionList.appendChild(button);
+    });
+    if (!sessionList.children.length) {
+      sessionList.innerHTML = '<div class="session-list-status">暂无历史会话</div>';
+    }
+  }
+
+  async function loadSessions() {
+    try {
+      const response = await fetch("/api/sessions");
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const data = await response.json();
+      renderSessionList(data.sessions || []);
+    } catch (err) {
+      sessionList.innerHTML = '<div class="session-list-status">会话加载失败</div>';
+    }
+  }
+
+  async function switchSession(nextSession) {
+    if (!nextSession || nextSession === session) return;
+    if (waiting || activeRun || answering) {
+      setStatus("当前会话仍在运行", true);
+      return;
+    }
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    session = nextSession;
+    updateSessionURL();
+    traceRuns = [];
+    traceEvents = [];
+    await loadHistory();
+    renderSessionList(sessionItems);
+    sessionSidebar.classList.remove("open");
+    connect();
+    if (traceView.style.display !== "none") loadTraceRuns();
+  }
+
+  function createSession() {
+    if (waiting || activeRun || answering) {
+      setStatus("当前会话仍在运行", true);
+      return;
+    }
+    const next = "web:" + Date.now() + ":" + Math.random().toString(36).slice(2, 8);
+    switchSession(next);
+  }
 
   function switchView(view) {
     const trace = view === "trace";
@@ -114,6 +252,7 @@ export function initLegacyController() {
     activeRun = false;
     sendBtn.disabled = false;
     cancelBtn.disabled = true;
+    loadSessions();
   }
 
   // showQuestion 渲染 agent 的提问：一张醒目卡片 + 可选项按钮。
@@ -569,7 +708,9 @@ export function initLegacyController() {
   // 前端是"哑渲染"：按 type 分发，用 messageId / toolCallId 把同一逻辑流的
   // 事件归到同一个 DOM 元素上。
   function connect() {
+    if (eventSource) eventSource.close();
     const es = new EventSource("/api/stream?session=" + encodeURIComponent(session));
+    eventSource = es;
 
     es.onmessage = function (e) {
       let evt;
@@ -688,6 +829,7 @@ export function initLegacyController() {
     activeRun = true;
     sendBtn.disabled = true;
     cancelBtn.disabled = false;
+    renderSessionList(sessionItems);
 
     try {
       const resp = await fetch("/api/send", {
@@ -713,12 +855,15 @@ export function initLegacyController() {
 
   sendBtn.addEventListener("click", send);
   cancelBtn.addEventListener("click", cancelTask);
+  newSessionBtn.addEventListener("click", createSession);
+  sessionToggle.addEventListener("click", function () { sessionSidebar.classList.toggle("open"); });
   chatTab.addEventListener("click", function () { switchView("chat"); });
   traceTab.addEventListener("click", function () { switchView("trace"); });
   runSelect.addEventListener("change", function () { loadTraceRun(runSelect.value); });
   runStatusFilter.addEventListener("change", loadTraceRuns);
   refreshTrace.addEventListener("click", loadTraceRuns);
 
-  connect();
+  loadSessions();
+  loadHistory().finally(connect);
   input.focus();
 }

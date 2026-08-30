@@ -30,6 +30,24 @@ type Indexer interface {
 	Delete(ctx context.Context, ids []string) error
 }
 
+type SemanticHit struct {
+	ID    string
+	Score float64
+}
+
+// SemanticSearcher is an optional read extension for vector indexes. The
+// canonical MemoryStore is still responsible for hydrating and validating IDs.
+type SemanticSearcher interface {
+	Search(ctx context.Context, vector []float32, query Query) ([]SemanticHit, error)
+}
+
+// Reranker is an optional cross-encoder/neural reranking hook. It receives the
+// fused candidate list and may return a reordered list. Implementations are
+// intentionally external so deployments can choose a local or hosted model.
+type Reranker interface {
+	Rerank(ctx context.Context, query string, items []Memory) ([]Memory, error)
+}
+
 type OpenAIEmbeddingProvider struct {
 	BaseURL    string
 	APIKey     string
@@ -141,6 +159,75 @@ func (q *QdrantIndexer) Delete(ctx context.Context, ids []string) error {
 		points = append(points, qdrantPointID(id))
 	}
 	return q.doJSON(ctx, http.MethodPost, "/collections/"+q.config.Collection+"/points/delete?wait=true", map[string]any{"points": points}, nil)
+}
+
+func (q *QdrantIndexer) Search(ctx context.Context, vector []float32, query Query) ([]SemanticHit, error) {
+	if len(vector) == 0 {
+		return nil, errors.New("memory: semantic search vector is empty")
+	}
+	if strings.TrimSpace(query.UserID) == "" {
+		return nil, errors.New("memory: semantic search user id is required")
+	}
+	limit := query.Limit
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	statusValues := []any{"active"}
+	if query.IncludeConflicts {
+		statusValues = append(statusValues, "conflict")
+	}
+	must := []any{
+		map[string]any{"key": "user_id", "match": map[string]any{"value": query.UserID}},
+		map[string]any{"key": "status", "match": map[string]any{"any": statusValues}},
+	}
+	if len(query.Kinds) > 0 {
+		kinds := make([]any, 0, len(query.Kinds))
+		for _, kind := range query.Kinds {
+			if kind = strings.TrimSpace(kind); kind != "" {
+				kinds = append(kinds, kind)
+			}
+		}
+		if len(kinds) > 0 {
+			must = append(must, map[string]any{"key": "kind", "match": map[string]any{"any": kinds}})
+		}
+	}
+	body := map[string]any{
+		"vector":       vector,
+		"limit":        limit,
+		"with_payload": true,
+		"with_vector":  false,
+		"filter":       map[string]any{"must": must},
+	}
+	var response struct {
+		Result []struct {
+			ID      any            `json:"id"`
+			Score   float64        `json:"score"`
+			Payload map[string]any `json:"payload"`
+		} `json:"result"`
+	}
+	if err := q.doJSON(ctx, http.MethodPost, "/collections/"+q.config.Collection+"/points/search", body, &response); err != nil {
+		return nil, err
+	}
+	hits := make([]SemanticHit, 0, len(response.Result))
+	for _, result := range response.Result {
+		id := ""
+		if value, ok := result.Payload["memory_id"].(string); ok {
+			id = strings.TrimSpace(value)
+		}
+		if id == "" {
+			if value, ok := result.ID.(string); ok {
+				id = strings.TrimSpace(value)
+			}
+		}
+		if id == "" {
+			continue
+		}
+		hits = append(hits, SemanticHit{ID: id, Score: result.Score})
+	}
+	return hits, nil
 }
 
 func (q *QdrantIndexer) ensureCollection(ctx context.Context) error {

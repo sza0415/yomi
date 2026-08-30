@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"math"
 	"regexp"
 	"strings"
 )
@@ -41,8 +42,12 @@ func (p Policy) Apply(candidates []Candidate) PolicyResult {
 			reason = "unsupported_kind"
 		case candidate.Confidence < p.MinConfidence:
 			reason = "low_confidence"
+		case math.IsNaN(candidate.Confidence) || math.IsInf(candidate.Confidence, 0) || candidate.Confidence > 1:
+			reason = "invalid_confidence"
 		case candidate.Importance < p.MinImportance:
 			reason = "low_importance"
+		case math.IsNaN(candidate.Importance) || math.IsInf(candidate.Importance, 0) || candidate.Importance > 1:
+			reason = "invalid_importance"
 		case len([]rune(candidate.Content)) > p.MaxContentChars:
 			reason = "content_too_long"
 		case sensitivePattern.MatchString(candidate.Content) || sensitivePattern.MatchString(candidate.Evidence):

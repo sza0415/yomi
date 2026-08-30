@@ -325,6 +325,7 @@
   .view-tab { height: 30px; padding: 0 16px; }
   .view-tab.active { background: var(--accent-soft); border-color: rgba(124, 156, 255, .36); color: #d2dcff; }
   .header-meta { display: flex; align-items: center; gap: 15px; margin-left: auto; }
+  .session-toggle { display: none; }
   .model-chip {
     border: 1px solid var(--border-soft); border-radius: 999px; padding: 5px 9px;
     color: var(--muted); font-size: 10px; letter-spacing: .04em; text-transform: uppercase;
@@ -333,6 +334,7 @@
   header .status { font-size: 11px; }
 
   #messages { padding: 42px 0 132px; }
+  #messages { margin-left: 252px; }
   .wrap { max-width: 920px; padding: 0 30px; }
   .empty-state { max-width: 560px; margin: 15vh auto 0; padding: 0 20px; text-align: center; }
   .empty-kicker { color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .18em; }
@@ -364,7 +366,7 @@
   .msg.question .bubble { background: rgba(49, 40, 72, .78); border-color: #6858a0; }
   .option-btn { border-radius: 7px; padding: 8px 13px; font-size: 13px; }
 
-  footer { position: fixed; z-index: 5; right: 0; bottom: 0; left: 0; padding: 15px 0 13px; background: rgba(17, 22, 30, .96); border-top-color: var(--border); backdrop-filter: blur(12px); }
+  footer { position: fixed; z-index: 5; right: 0; bottom: 0; left: 252px; padding: 15px 0 13px; background: rgba(17, 22, 30, .96); border-top-color: var(--border); backdrop-filter: blur(12px); }
   .composer { max-width: 920px; padding: 0 30px; gap: 9px; }
   textarea { min-height: 46px; border-color: var(--border); background: #0c1117; border-radius: 12px; padding: 12px 15px; }
   textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
@@ -373,7 +375,7 @@
   button.cancel-button:hover { background: #8e4b58; }
   .hint { margin-top: 7px; color: var(--subtle); font-size: 10px; }
 
-  #traceView { background: var(--bg); }
+  #traceView { background: var(--bg); margin-left: 252px; }
   .trace-toolbar { min-height: 62px; padding: 12px 28px; background: var(--panel); border-bottom-color: var(--border); }
   .trace-toolbar label { color: var(--subtle); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
   .trace-toolbar select { min-width: 220px; border-radius: 8px; border-color: var(--border); padding: 9px 11px; }
@@ -390,20 +392,48 @@
   .detail-title { font-size: 20px; }
   .detail-code { border-color: var(--border); background: #0b1016; }
 
+  .session-sidebar {
+    position: fixed;
+    z-index: 6;
+    top: 66px;
+    bottom: 0;
+    left: 0;
+    width: 252px;
+    overflow-y: auto;
+    padding: 18px 12px;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+  }
+  .sidebar-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 8px 12px; color: var(--text); font-size: 12px; font-weight: 700; letter-spacing: .04em; }
+  .new-session { width: 30px; height: 30px; padding: 0; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 20px; line-height: 1; }
+  .new-session:hover { background: var(--accent); }
+  .session-list { display: flex; flex-direction: column; gap: 4px; }
+  .session-item { width: 100%; height: auto; min-height: 58px; padding: 9px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text); text-align: left; font-size: 12px; font-weight: 500; }
+  .session-item:hover { background: var(--panel-2); }
+  .session-item.active { background: var(--accent-soft); border-color: rgba(124, 156, 255, .38); }
+  .session-title, .session-preview { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .session-title { color: var(--text); }
+  .session-preview { margin-top: 5px; color: var(--muted); font-size: 11px; font-weight: 400; }
+  .session-list-status { padding: 18px 8px; color: var(--muted); font-size: 11px; text-align: center; }
+
   @media (max-width: 760px) {
     header { height: 60px; padding: 0 16px; gap: 10px; }
     .brand { min-width: 0; }
     .brand-copy > span, .model-chip { display: none; }
     .view-tabs { margin-left: auto; }
+    .session-toggle { display: block; height: 32px; padding: 0 10px; background: var(--panel-2); border: 1px solid var(--border); color: var(--muted); font-size: 11px; }
+    .session-sidebar { top: 60px; width: min(86vw, 300px); transform: translateX(-102%); transition: transform .18s ease; box-shadow: 12px 0 30px rgba(0, 0, 0, .25); }
+    .session-sidebar.open { transform: translateX(0); }
     .header-meta { margin-left: 0; gap: 0; }
-    #messages { padding-top: 28px; padding-bottom: 118px; }
+    #messages { margin-left: 0; padding-top: 28px; padding-bottom: 118px; }
+    #traceView { margin-left: 0; }
     .wrap, .composer { padding-left: 16px; padding-right: 16px; }
     .empty-state { margin-top: 12vh; }
     .empty-state h2 { font-size: 23px; }
     .msg.user { padding-left: 28px; }
     .msg.bot::before, .msg.reasoning::before, .msg.tool::before { flex-basis: 22px; width: 22px; height: 22px; }
     .bubble, .collapsible { max-width: calc(100% - 32px); }
-    footer { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+    footer { left: 0; padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
     .composer { gap: 7px; }
     .composer button { padding-left: 13px; padding-right: 13px; }
     .trace-toolbar { padding: 10px 16px; }

@@ -59,6 +59,8 @@ func (s *SQLiteStore) init() error {
 			user_id TEXT NOT NULL,
 			kind TEXT NOT NULL,
 			subject TEXT NOT NULL DEFAULT '',
+			attribute TEXT NOT NULL DEFAULT '',
+			value TEXT NOT NULL DEFAULT '',
 			content TEXT NOT NULL,
 			status TEXT NOT NULL,
 			source_run_id TEXT NOT NULL DEFAULT '',
@@ -97,6 +99,48 @@ func (s *SQLiteStore) init() error {
 			return fmt.Errorf("memory: initialize sqlite: %w", err)
 		}
 	}
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "attribute", definition: `TEXT NOT NULL DEFAULT ''`},
+		{name: "value", definition: `TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := s.ensureMemoryColumn(column.name, column.definition); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ensureMemoryColumn(name, definition string) error {
+	rows, err := s.db.Query(`PRAGMA table_info(memories)`)
+	if err != nil {
+		return fmt.Errorf("memory: inspect sqlite schema: %w", err)
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var columnName, columnType string
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return fmt.Errorf("memory: scan sqlite schema: %w", err)
+		}
+		if columnName == name {
+			found = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("memory: close sqlite schema rows: %w", err)
+	}
+	if found {
+		return nil
+	}
+	if _, err := s.db.Exec(`ALTER TABLE memories ADD COLUMN ` + name + ` ` + definition); err != nil {
+		return fmt.Errorf("memory: add sqlite column %s: %w", name, err)
+	}
 	return nil
 }
 
@@ -108,6 +152,11 @@ func (s *SQLiteStore) Close() error {
 }
 
 func (s *SQLiteStore) Upsert(ctx context.Context, item Memory) error {
+	return s.ApplyMutation(ctx, Mutation{Memory: item})
+}
+
+func (s *SQLiteStore) ApplyMutation(ctx context.Context, mutation Mutation) error {
+	item := mutation.Memory
 	if err := validateMemory(item); err != nil {
 		return err
 	}
@@ -131,9 +180,22 @@ func (s *SQLiteStore) Upsert(ctx context.Context, item Memory) error {
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("memory: begin upsert: %w", err)
+		return fmt.Errorf("memory: begin mutation: %w", err)
 	}
 	defer tx.Rollback()
+	for _, id := range uniqueIDs(mutation.SupersedeIDs, item.ID) {
+		if err := transitionMemory(ctx, tx, item.UserID, id, StatusSuperseded, EventSupersede, mutation.Reason, true, now); err != nil {
+			return err
+		}
+	}
+	for _, id := range uniqueIDs(mutation.ConflictIDs, item.ID) {
+		if err := transitionMemory(ctx, tx, item.UserID, id, StatusConflict, EventConflict, mutation.Reason, false, now); err != nil {
+			return err
+		}
+	}
+	if len(mutation.ConflictIDs) > 0 {
+		item.Status = StatusConflict
+	}
 	var existingUser string
 	err = tx.QueryRowContext(ctx, `SELECT user_id FROM memories WHERE id = ?`, item.ID).Scan(&existingUser)
 	if err == nil && existingUser != item.UserID {
@@ -144,13 +206,14 @@ func (s *SQLiteStore) Upsert(ctx context.Context, item Memory) error {
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO memories (
-			id, user_id, kind, subject, content, status, source_run_id,
+			id, user_id, kind, subject, attribute, value, content, status, source_run_id,
 			source_session_id, evidence, confidence, importance, valid_from,
 			expires_at, supersedes_id, index_status, embedding_model,
 			embedding_version, embedding_dim, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
-			kind=excluded.kind, subject=excluded.subject, content=excluded.content,
+			kind=excluded.kind, subject=excluded.subject, attribute=excluded.attribute,
+			value=excluded.value, content=excluded.content,
 			status=excluded.status, source_run_id=excluded.source_run_id,
 			source_session_id=excluded.source_session_id, evidence=excluded.evidence,
 			confidence=excluded.confidence, importance=excluded.importance,
@@ -169,13 +232,60 @@ func (s *SQLiteStore) Upsert(ctx context.Context, item Memory) error {
 			return fmt.Errorf("memory: index fts record: %w", err)
 		}
 	}
-	if err := appendEvent(ctx, tx, Event{EventID: NewID("evt"), MemoryID: item.ID, UserID: item.UserID, Type: EventUpsert, Memory: item, CreatedAt: now}); err != nil {
+	eventType := EventUpsert
+	if item.Status == StatusConflict {
+		eventType = EventConflict
+	}
+	if err := appendEvent(ctx, tx, Event{EventID: NewID("evt"), MemoryID: item.ID, UserID: item.UserID, Type: eventType, Memory: item, Reason: mutation.Reason, CreatedAt: now}); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("memory: commit upsert: %w", err)
+		return fmt.Errorf("memory: commit mutation: %w", err)
 	}
 	return nil
+}
+
+func uniqueIDs(ids []string, exclude string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || id == exclude {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
+}
+
+func transitionMemory(ctx context.Context, tx *sql.Tx, userID, id, status, eventType, reason string, removeFTS bool, now time.Time) error {
+	row := tx.QueryRowContext(ctx, fmt.Sprintf(`SELECT %s FROM memories m WHERE m.user_id = ? AND m.id = ?`, memoryColumns("m")), userID, id)
+	item, err := scanMemory(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("memory: related memory not found: %s", id)
+	}
+	if err != nil {
+		return fmt.Errorf("memory: load related memory %s: %w", id, err)
+	}
+	if item.Status == status {
+		return nil
+	}
+	item.Status = status
+	item.IndexStatus = "pending"
+	item.UpdatedAt = now
+	if _, err := tx.ExecContext(ctx, `UPDATE memories SET status = ?, index_status = ?, updated_at = ? WHERE id = ? AND user_id = ?`, status, item.IndexStatus, now.Format(time.RFC3339Nano), id, userID); err != nil {
+		return fmt.Errorf("memory: transition related memory %s: %w", id, err)
+	}
+	if removeFTS {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM memory_fts WHERE memory_id = ?`, id); err != nil {
+			return fmt.Errorf("memory: remove related fts record %s: %w", id, err)
+		}
+	}
+	return appendEvent(ctx, tx, Event{EventID: NewID("evt"), MemoryID: id, UserID: userID, Type: eventType, Memory: item, Reason: reason, CreatedAt: now})
 }
 
 func (s *SQLiteStore) Search(ctx context.Context, query Query) ([]Memory, error) {
@@ -193,14 +303,21 @@ func (s *SQLiteStore) Search(ctx context.Context, query Query) ([]Memory, error)
 	if query.IncludeConflicts {
 		statusClause = `m.status IN ('active', 'conflict')`
 	}
+	kindClause, kindArgs := kindFilter(query.Kinds)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	text := strings.TrimSpace(query.Text)
 	var rows *sql.Rows
 	var err error
 	if text == "" {
-		rows, err = s.db.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM memories m WHERE m.user_id = ? AND %s AND (m.expires_at IS NULL OR m.expires_at = '' OR m.expires_at > ?) ORDER BY m.importance DESC, m.updated_at DESC LIMIT ?`, memoryColumns("m"), statusClause), query.UserID, now, limit)
+		args := []any{query.UserID}
+		args = append(args, kindArgs...)
+		args = append(args, now, limit)
+		rows, err = s.db.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM memories m WHERE m.user_id = ? %s AND %s AND (m.expires_at IS NULL OR m.expires_at = '' OR m.expires_at > ?) ORDER BY m.importance DESC, m.updated_at DESC LIMIT ?`, memoryColumns("m"), kindClause, statusClause), args...)
 	} else if fts := ftsQuery(text); fts != "" {
-		rows, err = s.db.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM memory_fts f JOIN memories m ON m.id = f.memory_id WHERE memory_fts MATCH ? AND m.user_id = ? AND %s AND (m.expires_at IS NULL OR m.expires_at = '' OR m.expires_at > ?) ORDER BY bm25(memory_fts), m.importance DESC, m.updated_at DESC LIMIT ?`, memoryColumns("m"), statusClause), fts, query.UserID, now, limit)
+		args := []any{fts, query.UserID}
+		args = append(args, kindArgs...)
+		args = append(args, now, limit)
+		rows, err = s.db.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM memory_fts f JOIN memories m ON m.id = f.memory_id WHERE memory_fts MATCH ? AND m.user_id = ? %s AND %s AND (m.expires_at IS NULL OR m.expires_at = '' OR m.expires_at > ?) ORDER BY bm25(memory_fts), m.importance DESC, m.updated_at DESC LIMIT ?`, memoryColumns("m"), kindClause, statusClause), args...)
 	}
 	var items []Memory
 	if err == nil && rows != nil {
@@ -214,7 +331,10 @@ func (s *SQLiteStore) Search(ctx context.Context, query Query) ([]Memory, error)
 	}
 	// FTS tokenization is intentionally supplemented with a substring fallback;
 	// this keeps short IDs and languages without whitespace searchable.
-	rows, err = s.db.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM memories m WHERE m.user_id = ? AND %s AND (m.expires_at IS NULL OR m.expires_at = '' OR m.expires_at > ?) AND (m.content LIKE ? OR m.subject LIKE ?) ORDER BY m.importance DESC, m.updated_at DESC LIMIT ?`, memoryColumns("m"), statusClause), query.UserID, now, "%"+text+"%", "%"+text+"%", limit)
+	args := []any{query.UserID}
+	args = append(args, kindArgs...)
+	args = append(args, now, "%"+text+"%", "%"+text+"%", limit)
+	rows, err = s.db.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM memories m WHERE m.user_id = ? %s AND %s AND (m.expires_at IS NULL OR m.expires_at = '' OR m.expires_at > ?) AND (m.content LIKE ? OR m.subject LIKE ?) ORDER BY m.importance DESC, m.updated_at DESC LIMIT ?`, memoryColumns("m"), kindClause, statusClause), args...)
 	if err != nil {
 		return nil, fmt.Errorf("memory: fallback search: %w", err)
 	}
@@ -223,6 +343,30 @@ func (s *SQLiteStore) Search(ctx context.Context, query Query) ([]Memory, error)
 		return nil, err
 	}
 	return items, nil
+}
+
+func kindFilter(kinds []string) (string, []any) {
+	seen := make(map[string]struct{}, len(kinds))
+	values := make([]any, 0, len(kinds))
+	for _, kind := range kinds {
+		kind = strings.TrimSpace(kind)
+		if kind == "" {
+			continue
+		}
+		if _, ok := seen[kind]; ok {
+			continue
+		}
+		seen[kind] = struct{}{}
+		values = append(values, kind)
+	}
+	if len(values) == 0 {
+		return "", nil
+	}
+	placeholders := make([]string, len(values))
+	for i := range placeholders {
+		placeholders[i] = "?"
+	}
+	return "AND m.kind IN (" + strings.Join(placeholders, ",") + ")", values
 }
 
 func (s *SQLiteStore) Get(ctx context.Context, userID, id string) (Memory, error) {
@@ -237,6 +381,18 @@ func (s *SQLiteStore) Get(ctx context.Context, userID, id string) (Memory, error
 	return item, err
 }
 
+func (s *SQLiteStore) FindRelated(ctx context.Context, userID, kind, subject, attribute string) ([]Memory, error) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, errors.New("memory: related search user id is required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM memories m WHERE m.user_id = ? AND m.kind = ? AND lower(trim(m.subject)) = lower(trim(?)) AND lower(trim(m.attribute)) = lower(trim(?)) AND m.status IN ('active', 'conflict') AND (m.expires_at IS NULL OR m.expires_at = '' OR m.expires_at > ?) ORDER BY m.updated_at DESC`, memoryColumns("m")), userID, kind, subject, attribute, now)
+	if err != nil {
+		return nil, fmt.Errorf("memory: search related memories: %w", err)
+	}
+	return scanMemories(rows)
+}
+
 func (s *SQLiteStore) List(ctx context.Context, userID string) ([]Memory, error) {
 	return s.Search(ctx, Query{UserID: userID, Limit: 100})
 }
@@ -247,7 +403,7 @@ func (s *SQLiteStore) Delete(ctx context.Context, userID, id, reason string) err
 		return err
 	}
 	item.Status = StatusDeleted
-	item.IndexStatus = "indexed"
+	item.IndexStatus = "pending"
 	item.UpdatedAt = time.Now().UTC()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -300,7 +456,7 @@ func (s *SQLiteStore) Rebuild(ctx context.Context, userID string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM memory_fts WHERE user_id = ?`, userID); err != nil {
 		return fmt.Errorf("memory: clear fts records: %w", err)
 	}
-	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM memories m WHERE m.user_id = ? AND m.status != 'deleted'`, memoryColumns("m")), userID)
+	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM memories m WHERE m.user_id = ? AND m.status IN ('active', 'conflict')`, memoryColumns("m")), userID)
 	if err != nil {
 		return fmt.Errorf("memory: load records for rebuild: %w", err)
 	}
@@ -337,7 +493,7 @@ func validateMemory(item Memory) error {
 }
 
 func memoryArgs(item Memory) []any {
-	return []any{item.ID, item.UserID, item.Kind, item.Subject, item.Content, item.Status, item.SourceRunID, item.SourceSessionID, item.Evidence, item.Confidence, item.Importance, nullableTime(item.ValidFrom), nullableTime(item.ExpiresAt), item.SupersedesID, item.IndexStatus, item.EmbeddingModel, item.EmbeddingVersion, item.EmbeddingDim, item.CreatedAt.UTC().Format(time.RFC3339Nano), item.UpdatedAt.UTC().Format(time.RFC3339Nano)}
+	return []any{item.ID, item.UserID, item.Kind, item.Subject, item.Attribute, item.Value, item.Content, item.Status, item.SourceRunID, item.SourceSessionID, item.Evidence, item.Confidence, item.Importance, nullableTime(item.ValidFrom), nullableTime(item.ExpiresAt), item.SupersedesID, item.IndexStatus, item.EmbeddingModel, item.EmbeddingVersion, item.EmbeddingDim, item.CreatedAt.UTC().Format(time.RFC3339Nano), item.UpdatedAt.UTC().Format(time.RFC3339Nano)}
 }
 
 func nullableTime(value time.Time) any {
@@ -359,7 +515,7 @@ func appendEvent(ctx context.Context, tx *sql.Tx, event Event) error {
 }
 
 func memoryColumns(alias string) string {
-	return alias + `.id, ` + alias + `.user_id, ` + alias + `.kind, ` + alias + `.subject, ` + alias + `.content, ` + alias + `.status, ` + alias + `.source_run_id, ` + alias + `.source_session_id, ` + alias + `.evidence, ` + alias + `.confidence, ` + alias + `.importance, ` + alias + `.valid_from, ` + alias + `.expires_at, ` + alias + `.supersedes_id, ` + alias + `.index_status, ` + alias + `.embedding_model, ` + alias + `.embedding_version, ` + alias + `.embedding_dim, ` + alias + `.created_at, ` + alias + `.updated_at`
+	return alias + `.id, ` + alias + `.user_id, ` + alias + `.kind, ` + alias + `.subject, ` + alias + `.attribute, ` + alias + `.value, ` + alias + `.content, ` + alias + `.status, ` + alias + `.source_run_id, ` + alias + `.source_session_id, ` + alias + `.evidence, ` + alias + `.confidence, ` + alias + `.importance, ` + alias + `.valid_from, ` + alias + `.expires_at, ` + alias + `.supersedes_id, ` + alias + `.index_status, ` + alias + `.embedding_model, ` + alias + `.embedding_version, ` + alias + `.embedding_dim, ` + alias + `.created_at, ` + alias + `.updated_at`
 }
 
 type rowScanner interface {
@@ -369,7 +525,7 @@ type rowScanner interface {
 func scanMemory(row rowScanner) (Memory, error) {
 	var item Memory
 	var validFrom, expiresAt, createdAt, updatedAt sql.NullString
-	if err := row.Scan(&item.ID, &item.UserID, &item.Kind, &item.Subject, &item.Content, &item.Status, &item.SourceRunID, &item.SourceSessionID, &item.Evidence, &item.Confidence, &item.Importance, &validFrom, &expiresAt, &item.SupersedesID, &item.IndexStatus, &item.EmbeddingModel, &item.EmbeddingVersion, &item.EmbeddingDim, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&item.ID, &item.UserID, &item.Kind, &item.Subject, &item.Attribute, &item.Value, &item.Content, &item.Status, &item.SourceRunID, &item.SourceSessionID, &item.Evidence, &item.Confidence, &item.Importance, &validFrom, &expiresAt, &item.SupersedesID, &item.IndexStatus, &item.EmbeddingModel, &item.EmbeddingVersion, &item.EmbeddingDim, &createdAt, &updatedAt); err != nil {
 		return Memory{}, err
 	}
 	var err error

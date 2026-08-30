@@ -276,13 +276,27 @@ func (l *Loop) handleRun(ctx context.Context, in bus.InboundMessage, run *Run) {
 					"user_id_hash": hashScope(in.UserID), "query_hash": hashScope(in.Text), "error": built.MemoryError,
 				})
 			} else {
-				l.record(ctx, run, tracing.EventMemoryRetrievalFinished, "completed", map[string]any{
-					"user_id_hash": hashScope(in.UserID), "query_hash": hashScope(in.Text), "memory_count": built.MemoryCount, "memory_ids": built.MemoryIDs,
-				})
+				retrievalData := map[string]any{
+					"user_id_hash": hashScope(in.UserID), "query_hash": hashScope(in.Text),
+					"memory_count": built.MemoryCount, "memory_ids": built.MemoryIDs,
+					"profile_count": built.MemoryProfileCount, "episode_count": built.MemoryEpisodeCount,
+					"lexical_count": built.MemoryLexicalCount, "semantic_count": built.MemorySemanticCount,
+					"fused_count": built.MemoryFusedCount, "fallback": built.MemoryFallback,
+				}
+				if built.MemorySemanticError != "" {
+					retrievalData["semantic_error"] = built.MemorySemanticError
+				}
+				if built.MemoryRerankError != "" {
+					retrievalData["rerank_error"] = built.MemoryRerankError
+				}
+				l.record(ctx, run, tracing.EventMemoryRetrievalFinished, "completed", retrievalData)
 				if built.MemoryCount > 0 {
 					l.record(ctx, run, tracing.EventMemoryContextInjected, "completed", map[string]any{
 						"user_id_hash": hashScope(in.UserID), "query_hash": hashScope(in.Text),
 						"memory_count": built.MemoryCount, "memory_ids": built.MemoryIDs, "estimated_tokens": built.MemoryTokens,
+						"profile_count": built.MemoryProfileCount, "episode_count": built.MemoryEpisodeCount,
+						"lexical_count": built.MemoryLexicalCount, "semantic_count": built.MemorySemanticCount,
+						"fused_count": built.MemoryFusedCount, "fallback": built.MemoryFallback,
 					})
 				}
 			}

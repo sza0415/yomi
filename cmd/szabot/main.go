@@ -135,6 +135,54 @@ func main() {
 			memoryIndexer = indexer
 		}
 	}
+	rerankerEnabled := rerankerEnabledByConfig()
+	rerankerModel := strings.TrimSpace(os.Getenv("SZABOT_RERANKER_MODEL"))
+	rerankerBaseURL := strings.TrimSpace(os.Getenv("SZABOT_RERANKER_BASE_URL"))
+	if rerankerBaseURL == "" {
+		rerankerBaseURL = embeddingBaseURL
+	}
+	rerankerAPIKey := envOr("SZABOT_RERANKER_API_KEY", embeddingAPIKey)
+	var reranker memory.Reranker
+	if rerankerEnabled && rerankerBaseURL != "" && rerankerAPIKey != "" && rerankerModel != "" {
+		reranker = &memory.HTTPReranker{
+			BaseURL: rerankerBaseURL, APIKey: rerankerAPIKey, ModelName: rerankerModel,
+			TopN: envIntDefault("SZABOT_RERANKER_TOP_N", 20),
+		}
+	} else if rerankerEnabled {
+		fmt.Fprintln(os.Stderr, "warning: reranker enabled but base URL, API key, or model is missing; reranker disabled")
+	}
+	var contextMemory memory.Store = memoryStore
+	hybridSearchReason := "sqlite_fts_only"
+	if memoryEmbedder != nil {
+		if semanticSearcher, ok := memoryIndexer.(memory.SemanticSearcher); ok {
+			hybrid := memory.NewHybridStore(memoryStore, memoryEmbedder, semanticSearcher)
+			hybrid.Reranker = reranker
+			contextMemory = hybrid
+			hybridSearchReason = "fts_bm25_plus_qdrant_rrf"
+		} else {
+			hybridSearchReason = "qdrant_searcher_unavailable"
+		}
+	} else if qdrantEnabled {
+		hybridSearchReason = "embedding_or_qdrant_index_disabled"
+	} else {
+		hybridSearchReason = "qdrant_disabled"
+	}
+	if reranker != nil && hybridSearchReason != "fts_bm25_plus_qdrant_rrf" {
+		fmt.Fprintf(os.Stderr, "warning: reranker configured but inactive because hybrid retrieval is disabled (reason=%s)\n", hybridSearchReason)
+	}
+	qdrantIndexReason := "qdrant_disabled"
+	if qdrantEnabled {
+		switch {
+		case !qdrantReady:
+			qdrantIndexReason = "qdrant_not_ready"
+		case embeddingBaseURL == "" || embeddingAPIKey == "" || embeddingModel == "":
+			qdrantIndexReason = "embedding_config_incomplete"
+		case memoryIndexer == nil || memoryEmbedder == nil:
+			qdrantIndexReason = "indexer_init_failed"
+		default:
+			qdrantIndexReason = "enabled"
+		}
+	}
 	artifactStore, err := tools.NewArtifactStore(filepath.Join(rootDir, "artifacts"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: init artifact store: %v\n", err)
@@ -182,7 +230,7 @@ func main() {
 			SummaryTimeout:   summaryTimeout,
 			ContextBudget:    contextBudget,
 			Tools:            registry,
-			Memory:           memoryStore,
+			Memory:           contextMemory,
 		},
 		Memory:          memoryStore,
 		MemoryExtractor: memoryExtractor,
@@ -203,9 +251,18 @@ func main() {
 		QdrantAutoStart:     qdrantAutoStartEnabled(qdrantURL),
 		QdrantReady:         qdrantReady,
 		QdrantIndexEnabled:  memoryIndexer != nil && memoryEmbedder != nil,
+		QdrantIndexReason:   qdrantIndexReason,
 		EmbeddingBaseURL:    embeddingBaseURL,
 		EmbeddingModel:      embeddingModel,
 		EmbeddingKeyPresent: embeddingAPIKey != "",
+		HybridSearchEnabled: hybridSearchReason == "fts_bm25_plus_qdrant_rrf",
+		HybridSearchReason:  hybridSearchReason,
+		RerankerRequested:   rerankerEnabled,
+		RerankerEnabled:     reranker != nil && hybridSearchReason == "fts_bm25_plus_qdrant_rrf",
+		RerankerBaseURL:     rerankerBaseURL,
+		RerankerModel:       rerankerModel,
+		RerankerKeyPresent:  rerankerAPIKey != "",
+		RerankerTopN:        envIntDefault("SZABOT_RERANKER_TOP_N", 20),
 	})
 
 	// 4. 选择前端 channel。
@@ -221,6 +278,7 @@ func main() {
 			Bus:       b,
 			Trace:     traceSink,
 			Snapshots: runSnapshots,
+			Sessions:  store,
 			Addr:      addr,
 			// 只有 Web 客户端显式点击取消时，才停止该会话正在运行的
 			// Runner/LLM 请求。SSE 断连本身不影响任务生命周期。
@@ -259,9 +317,18 @@ type memoryRuntimeConfig struct {
 	QdrantAutoStart     bool
 	QdrantReady         bool
 	QdrantIndexEnabled  bool
+	QdrantIndexReason   string
 	EmbeddingBaseURL    string
 	EmbeddingModel      string
 	EmbeddingKeyPresent bool
+	HybridSearchEnabled bool
+	HybridSearchReason  string
+	RerankerRequested   bool
+	RerankerEnabled     bool
+	RerankerBaseURL     string
+	RerankerModel       string
+	RerankerKeyPresent  bool
+	RerankerTopN        int
 }
 
 func printRuntimeConfig(provider providers.Provider, model, workspace, sessionRoot string, maxContextTokens, recentMessages int, summaryTimeout, runTimeout time.Duration, budget agent.RunBudget, memoryConfig memoryRuntimeConfig) {
@@ -276,8 +343,15 @@ func printRuntimeConfig(provider providers.Provider, model, workspace, sessionRo
 	fmt.Printf("  permission_mode=%s\n", permissionMode())
 	fmt.Printf("  memory.db=%s sqlite_fts5=enabled extraction=%s extraction_timeout=%s\n",
 		memoryConfig.DBPath, enabledText(memoryConfig.ExtractionEnabled), memoryConfig.ExtractionTimeout)
+	fmt.Printf("  memory.layers=profile(fact,preference):limit=4 episode(episode):limit=4\n")
 	fmt.Printf("  memory.embedding.base_url=%s model=%s api_key=%s\n",
 		valueText(memoryConfig.EmbeddingBaseURL), valueText(memoryConfig.EmbeddingModel), configuredText(memoryConfig.EmbeddingKeyPresent))
+	fmt.Printf("  memory.retrieval=hybrid=%s reason=%s\n",
+		enabledText(memoryConfig.HybridSearchEnabled), memoryConfig.HybridSearchReason)
+	fmt.Printf("  memory.reranker.base_url=%s model=%s api_key=%s enabled=%s\n",
+		valueText(memoryConfig.RerankerBaseURL), valueText(memoryConfig.RerankerModel), configuredText(memoryConfig.RerankerKeyPresent), enabledText(memoryConfig.RerankerEnabled))
+	fmt.Printf("  memory.reranker=requested=%s enabled=%s top_n=%d endpoint=/rerank\n",
+		enabledText(memoryConfig.RerankerRequested), enabledText(memoryConfig.RerankerEnabled), memoryConfig.RerankerTopN)
 	if !memoryConfig.QdrantEnabled {
 		fmt.Println("  memory.qdrant=disabled auto_start=disabled ready=disabled index=disabled reason=SZABOT_QDRANT_ENABLED=off")
 	} else if memoryConfig.QdrantURL == "" {
@@ -285,6 +359,7 @@ func printRuntimeConfig(provider providers.Provider, model, workspace, sessionRo
 	} else {
 		fmt.Printf("  memory.qdrant.url=%s collection=%s auto_start=%s ready=%s index=%s\n",
 			memoryConfig.QdrantURL, memoryConfig.QdrantCollection, enabledText(memoryConfig.QdrantAutoStart), enabledText(memoryConfig.QdrantReady), enabledText(memoryConfig.QdrantIndexEnabled))
+		fmt.Printf("  memory.qdrant.index_reason=%s\n", memoryConfig.QdrantIndexReason)
 	}
 }
 
@@ -515,6 +590,17 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func rerankerEnabledByConfig() bool {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("SZABOT_RERANKER_ENABLED")))
+	if mode == "off" || mode == "0" || mode == "false" {
+		return false
+	}
+	if mode == "on" || mode == "1" || mode == "true" {
+		return true
+	}
+	return strings.TrimSpace(os.Getenv("SZABOT_RERANKER_MODEL")) != ""
 }
 
 func memoryExtractionEnabled(provider providers.Provider) bool {
