@@ -320,6 +320,34 @@ docker pull qdrant/qdrant:latest
 yomi 会在退出前停止该容器；如果容器在 yomi 启动前就已经处于运行状态，则不会停止它，
 避免影响外部 Docker 编排或其他使用者。
 
+需要手动管理本地 Qdrant 时，可使用以下 Docker 命令。容器停止后，重新运行
+`go run ./cmd/szabot` 会按上面的自动启动规则恢复；也可以直接执行 `docker start`：
+
+```bash
+# 查看容器和端口状态
+docker ps -a --filter name=^yomi-qdrant$
+
+# 启动、停止、重启和查看日志
+docker start yomi-qdrant
+docker stop yomi-qdrant
+docker restart yomi-qdrant
+docker logs -f yomi-qdrant
+
+# 查看 Qdrant volume 的实际挂载位置
+docker volume inspect yomi-qdrant-data
+
+# 检查服务是否可访问，以及列出 Collections
+curl http://127.0.0.1:6333/collections
+```
+
+不要直接删除 `yomi-qdrant-data`，其中保存着 Qdrant 的向量索引。确认不再需要这些数据
+后，才执行下面的清理操作；删除后无法通过 yomi 恢复，只能从备份重建：
+
+```bash
+docker rm -f yomi-qdrant
+docker volume rm yomi-qdrant-data
+```
+
 #### Qdrant Web UI
 
 本地 Qdrant 服务运行后，可打开 [http://localhost:6333/dashboard](http://localhost:6333/dashboard)
