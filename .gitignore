@@ -13,6 +13,7 @@
 
 # 本地配置 / session 数据（后续会用到）
 .szabot/
+.yomi/
 /sessionlogs/
 *.local.json
 

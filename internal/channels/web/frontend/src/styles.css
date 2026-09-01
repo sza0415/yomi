@@ -212,6 +212,44 @@
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   .hint { text-align: center; color: var(--subtle); font-size: 11px; margin-top: 8px; }
   #traceView { display: none; flex: 1; flex-direction: column; min-height: 0; }
+  #configView { display: none; flex: 1; flex-direction: column; min-height: 0; overflow: auto; margin-left: 252px; background: var(--bg); }
+  .config-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 18px 30px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .config-toolbar h2 { margin: 4px 0 3px; font-size: 18px; }
+  .config-toolbar p { margin: 0; color: var(--muted); font-size: 11px; }
+  .config-kicker { color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .16em; }
+  .config-toolbar button { height: 36px; min-width: 52px; padding: 8px 13px; font-size: 12px; white-space: nowrap; }
+  .config-content { width: min(920px, 100%); margin: 0 auto; padding: 18px 30px 42px; }
+  .config-section { margin-bottom: 18px; }
+  .config-section > .config-section-summary { list-style: none; cursor: pointer; }
+  .config-section > .config-section-summary::-webkit-details-marker { display: none; }
+  .config-section > .config-section-summary .config-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 2px 0; }
+  .config-section > .config-section-summary .config-section-heading::after { content: "＋"; color: var(--accent); font-size: 17px; font-weight: 400; }
+  .config-section[open] > .config-section-summary .config-section-heading::after { content: "－"; }
+  .config-section-heading { margin-bottom: 8px; }
+  .config-section-heading h3 { margin: 0 0 3px; font-size: 13px; }
+  .config-section-heading p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.35; }
+  .config-item { padding: 9px 12px; border: 1px solid var(--border-soft); border-bottom: 0; background: var(--panel); }
+  .config-item:first-of-type { border-radius: 8px 8px 0 0; }
+  .config-item:last-of-type { border-bottom: 1px solid var(--border-soft); border-radius: 0 0 8px 8px; }
+  .config-item-top { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+  .config-item-top code { color: var(--text); font: 600 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .config-value { color: var(--green); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-align: right; overflow-wrap: anywhere; }
+  .config-env { margin-top: 3px; color: var(--subtle); font: 9px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .config-description { margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
+  .config-input { width: 100%; min-height: 34px; margin-top: 7px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--text); font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; outline: none; }
+  select.config-input { cursor: pointer; }
+  .config-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .config-meta { display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 6px; color: var(--subtle); font-size: 9px; }
+  .config-meta span + span { color: var(--orange); }
+  .config-empty { color: var(--muted); text-align: center; padding: 70px 20px; }
+  .config-actions { position: sticky; bottom: 12px; z-index: 2; display: flex; align-items: center; gap: 12px; margin-top: 10px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(17, 22, 30, .96); box-shadow: 0 8px 24px rgba(0, 0, 0, .22); }
+  .config-actions button { height: 34px; padding: 7px 13px; font-size: 11px; }
+  .config-actions span { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+  .config-only #messages, .config-only footer, .config-only .session-sidebar { display: none !important; }
+  .config-only #configView { margin-left: 0; }
+  .config-only #chatTab, .config-only #traceTab { display: none; }
+  .config-only .session-toggle { display: none; }
+  .config-only .header-meta .model-chip { display: none; }
   .trace-toolbar {
     display: flex; align-items: center; gap: 10px; padding: 12px 22px;
     border-bottom: 1px solid var(--border-soft); background: var(--panel);
@@ -426,7 +464,11 @@
     .session-sidebar.open { transform: translateX(0); }
     .header-meta { margin-left: 0; gap: 0; }
     #messages { margin-left: 0; padding-top: 28px; padding-bottom: 118px; }
-    #traceView { margin-left: 0; }
+    #traceView, #configView { margin-left: 0; }
+    .config-toolbar { padding: 14px 16px; }
+    .config-content { padding: 14px 16px 36px; }
+    .config-item-top { align-items: flex-start; flex-direction: column; gap: 5px; }
+    .config-value { text-align: left; }
     .wrap, .composer { padding-left: 16px; padding-right: 16px; }
     .empty-state { margin-top: 12vh; }
     .empty-state h2 { font-size: 23px; }

@@ -20,6 +20,7 @@ onMounted(() => {
       <div class="view-tabs">
         <button class="view-tab active" id="chatTab">聊天</button>
         <button class="view-tab" id="traceTab">Trace</button>
+        <button class="view-tab" id="configTab">配置</button>
       </div>
       <button class="session-toggle" id="sessionToggle" title="显示会话">会话</button>
       <div class="header-meta">
@@ -73,6 +74,18 @@ onMounted(() => {
         <section class="trace-list" id="traceList"><div class="trace-empty">选择 Trace 查看执行轨迹</div></section>
         <aside class="trace-detail" id="traceDetail"><div class="trace-empty">点击左侧事件查看详情</div></aside>
       </div>
+    </main>
+
+    <main id="configView">
+      <div class="config-toolbar">
+        <div>
+          <div class="config-kicker">YOMI CONFIGURATION</div>
+          <h2>运行配置</h2>
+          <p>这里展示本次启动实际生效的配置。个人项目模式会显示完整密钥；修改后请重启 yomi。</p>
+        </div>
+        <button id="refreshConfig" title="刷新配置">刷新</button>
+      </div>
+      <div id="configContent" class="config-content"><div class="config-empty">加载配置中…</div></div>
     </main>
 
     <footer>
