@@ -110,6 +110,20 @@ func TestHandleCancelRequiresSession(t *testing.T) {
 	}
 }
 
+func TestHandleConfigReturnsSanitizedView(t *testing.T) {
+	w := newTestWeb(bus.New(16))
+	w.Config = ConfigView{Sections: []ConfigSection{{ID: "start", Title: "首次运行", Items: []ConfigItem{{Key: "provider", Value: "echo", Sensitive: true}}}}}
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	rec := httptest.NewRecorder()
+	w.handleConfig(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "首次运行") || !strings.Contains(rec.Body.String(), "echo") {
+		t.Fatalf("config response = %s", rec.Body.String())
+	}
+}
+
 func TestInspectTraceIdentifiesCompleteAndIncompleteRuns(t *testing.T) {
 	now := time.Now()
 	complete := inspectTrace([]tracing.Event{

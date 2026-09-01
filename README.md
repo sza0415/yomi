@@ -173,6 +173,24 @@ go run ./cmd/szabot
 
 输入一条消息后会收到 `echo:` 回复；按 Ctrl+C 退出。
 
+如果使用 Web 界面，可执行 `SZABOT_WEB=1 go run ./cmd/szabot`，然后打开
+`http://localhost:8080`。顶部的“配置”页会展示本次启动实际生效的配置、默认值、每项作用、
+是否已配置以及是否需要重启。个人项目模式下配置页会显示完整 API key，建议只在本机访问。
+首次运行只需保持默认的 Echo Provider，确认链路正常后再按页面说明配置真实模型或记忆增强能力。
+
+Yomi 不会主动执行或解析 `~/.zshrc`；它读取启动命令所在 shell 继承的环境变量，因此需要在
+`~/.zshrc` 中使用 `export KEY=value`，重新打开终端后再启动 Yomi。
+
+也可以在 Agent 尚未启动前打开独立配置向导：
+
+```bash
+go run ./cmd/szabot --config
+```
+
+向导会在浏览器中提供可编辑表单，保存到 `.yomi/config.json`；之后直接运行
+`go run ./cmd/szabot` 即可生效。也可以通过 `YOMI_CONFIG_FILE` 指定配置文件位置，
+通过 `YOMI_CONFIG_ADDR` 修改向导监听地址。
+
 ## 能力扩展
 
 ### 上下文管理

@@ -52,6 +52,9 @@ type WebChannel struct {
 	Snapshots RunSnapshotReader
 	// Sessions 提供 Web 会话列表和历史回放。对话写入仍由 Agent Loop 负责。
 	Sessions *agent.SessionStore
+	// Config is the sanitized startup configuration shown in the Web settings view.
+	Config      ConfigView
+	ConfigStore ConfigStore
 
 	// Addr 是 HTTP 监听地址，如 ":8080"。默认 ":8080"。
 	Addr string
@@ -101,7 +104,9 @@ func (w *WebChannel) Start(ctx context.Context) error {
 	w.subscribers = make(map[string]map[*subscriber]struct{})
 
 	// 出站分发：全局唯一的 goroutine 读 bus，按 SessionID 投递。
-	go w.dispatch(ctx)
+	if w.Bus != nil {
+		go w.dispatch(ctx)
+	}
 
 	mux := http.NewServeMux()
 	distFS, err := fs.Sub(webDist, "web/dist")
@@ -117,6 +122,7 @@ func (w *WebChannel) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/runs", w.handleRuns)
 	mux.HandleFunc("/api/sessions", w.handleSessions)
 	mux.HandleFunc("/api/session/messages", w.handleSessionMessages)
+	mux.HandleFunc("/api/config", w.handleConfig)
 
 	server := &http.Server{Addr: w.Addr, Handler: mux}
 
@@ -136,6 +142,32 @@ func (w *WebChannel) Start(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+func (w *WebChannel) handleConfig(rw http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		view := w.Config
+		if w.ConfigStore != nil {
+			view.Editable = true
+			view.Values = w.ConfigStore.Snapshot()
+		}
+		writeJSON(rw, view)
+		return
+	}
+	if r.Method != http.MethodPut || w.ConfigStore == nil {
+		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var values map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&values); err != nil {
+		http.Error(rw, "invalid config", http.StatusBadRequest)
+		return
+	}
+	if err := w.ConfigStore.Update(values); err != nil {
+		http.Error(rw, "save config failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(rw, map[string]any{"saved": true})
 }
 
 // dispatch 是唯一读 bus.Outbound() 的 goroutine：按 SessionID 把出站消息

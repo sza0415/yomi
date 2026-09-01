@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net/url"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/ziangsun/szabot/internal/agent"
 	"github.com/ziangsun/szabot/internal/bus"
 	"github.com/ziangsun/szabot/internal/channels"
+	"github.com/ziangsun/szabot/internal/configstore"
 	"github.com/ziangsun/szabot/internal/memory"
 	"github.com/ziangsun/szabot/internal/providers"
 	"github.com/ziangsun/szabot/internal/skills"
@@ -34,6 +36,26 @@ import (
 )
 
 func main() {
+	configOnly := flag.Bool("config", false, "start the configuration wizard without starting the agent")
+	flag.Parse()
+	workspace, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: resolve workspace: %v\n", err)
+		os.Exit(1)
+	}
+	configPath := envOr("YOMI_CONFIG_FILE", filepath.Join(workspace, ".yomi", "config.json"))
+	settings, err := configstore.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: load config: %v\n", err)
+		os.Exit(1)
+	}
+	if *configOnly {
+		settings.ApplyToEnv()
+		runConfigWizard(workspace, configPath, settings)
+		return
+	}
+	settings.ApplyToEnv()
+
 	// 监听 Ctrl+C / SIGTERM，触发优雅退出。
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -45,11 +67,6 @@ func main() {
 	provider, model := buildProvider()
 
 	registry := tools.NewRegistry()
-	workspace, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: resolve workspace: %v\n", err)
-		os.Exit(1)
-	}
 	todoTool := registerTools(registry, workspace)
 
 	runner := &agent.Runner{
@@ -286,7 +303,9 @@ func main() {
 			Addr:      addr,
 			// 只有 Web 客户端显式点击取消时，才停止该会话正在运行的
 			// Runner/LLM 请求。SSE 断连本身不影响任务生命周期。
-			OnCancel: loop.CancelSession,
+			OnCancel:    loop.CancelSession,
+			Config:      buildConfigView(provider.Name(), model, workspace, rootDir, contextMaxTokens, contextRecentMessages, toolResultMaxTokens, outputReserveTokens, runTimeout, memoryExtractor != nil, qdrantEnabled, qdrantURL, qdrantCollection, qdrantAutoStartEnabled(qdrantURL), memoryIndexer != nil && memoryEmbedder != nil, embeddingBaseURL, embeddingModel, memoryConfigKeyPresent(embeddingAPIKey), rerankerEnabled, reranker != nil, rerankerBaseURL, rerankerModel, memoryConfigKeyPresent(rerankerAPIKey)),
+			ConfigStore: settings,
 		}
 		if err := web.Start(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "error: start web channel: %v\n", err)
@@ -318,6 +337,102 @@ func main() {
 		cleanupCancel()
 	}
 	fmt.Println("\nyomi stopped.")
+}
+
+func buildConfigView(provider, model, workspace, sessionRoot string, maxContext, recent, toolMax, outputReserve int, runTimeout time.Duration, extraction, qdrant bool, qdrantURL, qdrantCollection string, qdrantAutoStart, qdrantIndex bool, embeddingURL, embeddingModel string, embeddingKey bool, rerankerRequested, reranker bool, rerankerURL, rerankerModel string, rerankerKey bool) channels.ConfigView {
+	value := func(v string) string {
+		if strings.TrimSpace(v) == "" {
+			return "未设置"
+		}
+		return v
+	}
+	status := func(on bool) string {
+		if on {
+			return "已启用"
+		}
+		return "未启用"
+	}
+	embeddingKeyValue := envOr("SZABOT_EMBEDDING_API_KEY", os.Getenv("DEEPSEEK_API_KEY"))
+	rerankerKeyValue := envOr("SZABOT_RERANKER_API_KEY", embeddingKeyValue)
+	return channels.ConfigView{Sections: []channels.ConfigSection{
+		{ID: "start", Title: "首次运行", Description: "最小配置只需要启动并选择一个模型提供商。其余能力都可以保持默认。", Items: []channels.ConfigItem{
+			{Key: "provider", Env: "SZABOT_PROVIDER", Value: provider, Default: "echo", Description: "模型提供商。echo 不需要网络或密钥，适合首次验证；deepseek 需要 DEEPSEEK_API_KEY。", Status: "当前生效", RestartRequired: true},
+			{Key: "model", Env: "DEEPSEEK_MODEL", Value: model, Default: "deepseek-chat", Description: "发送请求时使用的模型名称；仅在使用 deepseek 或兼容 Provider 时生效。", Status: "当前生效", RestartRequired: true},
+			{Key: "provider_api_key", Env: "DEEPSEEK_API_KEY", Value: os.Getenv("DEEPSEEK_API_KEY"), Default: "echo 模式无需配置", Description: "真实模型服务的访问密钥。配置页会显示当前进程拿到的完整值。", Sensitive: true, RestartRequired: true},
+			{Key: "provider_base_url", Env: "DEEPSEEK_BASE_URL", Value: envOr("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"), Default: "https://api.deepseek.com/v1", Description: "OpenAI-compatible API 地址；使用官方 DeepSeek 时通常无需修改。", RestartRequired: true},
+			{Key: "workspace", Value: workspace, Description: "文件工具允许访问的工作区根目录。", Status: "当前生效", RestartRequired: true},
+		}},
+		{ID: "context", Title: "上下文与运行", Description: "控制历史消息、工具结果和单次任务的资源上限。数值越大越灵活，但会增加模型消耗。", Items: []channels.ConfigItem{
+			{Key: "max_context_tokens", Env: "SZABOT_MAX_CONTEXT_TOKENS", Value: strconv.Itoa(maxContext), Default: "6000", Description: "单次模型请求的上下文预算；接近上限时会压缩较早历史。", RestartRequired: true},
+			{Key: "recent_messages", Env: "SZABOT_CONTEXT_RECENT_MESSAGES", Value: strconv.Itoa(recent), Default: "8", Description: "压缩历史时保留的最近消息条数。", RestartRequired: true},
+			{Key: "tool_result_max_tokens", Env: "SZABOT_TOOL_RESULT_MAX_TOKENS", Value: strconv.Itoa(toolMax), Default: "1200", Description: "工具结果超过该近似 token 数时外置到 artifacts，模型按需读取。", RestartRequired: true},
+			{Key: "output_reserve_tokens", Env: "SZABOT_CONTEXT_OUTPUT_RESERVE_TOKENS", Value: strconv.Itoa(outputReserve), Default: "1024", Description: "为模型输出预留的上下文空间，不是输出长度上限。", RestartRequired: true},
+			{Key: "run_timeout", Env: "SZABOT_RUN_TIMEOUT", Value: runTimeout.String(), Default: "3m", Description: "单次任务最长运行时间，超时会结束 Run。", RestartRequired: true},
+			{Key: "max_input_tokens", Env: "SZABOT_MAX_INPUT_TOKENS", Value: limitText(envInt("SZABOT_MAX_INPUT_TOKENS")), Default: "不限", Description: "单次 Run 允许发送给模型的输入 token 上限。", RestartRequired: true},
+			{Key: "max_output_tokens", Env: "SZABOT_MAX_OUTPUT_TOKENS", Value: limitText(envInt("SZABOT_MAX_OUTPUT_TOKENS")), Default: "不限", Description: "单次 Run 允许模型生成的输出 token 上限。", RestartRequired: true},
+			{Key: "max_total_tokens", Env: "SZABOT_MAX_TOTAL_TOKENS", Value: limitText(envInt("SZABOT_MAX_TOTAL_TOKENS")), Default: "不限", Description: "单次 Run 输入和输出 token 的合计上限。", RestartRequired: true},
+			{Key: "max_model_calls", Env: "SZABOT_MAX_MODEL_CALLS", Value: limitText(envInt("SZABOT_MAX_MODEL_CALLS")), Default: "不限", Description: "单次 Run 最多调用模型的次数。", RestartRequired: true},
+			{Key: "max_tool_calls", Env: "SZABOT_MAX_TOOL_CALLS", Value: limitText(envInt("SZABOT_MAX_TOOL_CALLS")), Default: "不限", Description: "单次 Run 最多执行工具的次数。", RestartRequired: true},
+		}},
+		{ID: "memory", Title: "长期记忆", Description: "SQLite 记忆默认可用；向量检索和重排属于可选增强，需要额外服务与模型。", Items: []channels.ConfigItem{
+			{Key: "extraction", Env: "SZABOT_MEMORY_EXTRACTION", Value: status(extraction), Default: "真实 Provider 默认启用，echo 默认关闭", Description: "任务完成后从对话中提取事实、偏好和经历。", RestartRequired: true},
+			{Key: "session_dir", Env: "SZABOT_SESSION_DIR", Value: sessionRoot, Default: "工作区/sessionlogs", Description: "会话、Trace、artifacts 和 memory.db 的存储根目录。", RestartRequired: true},
+			{Key: "memory_timeout", Env: "SZABOT_MEMORY_TIMEOUT", Value: envDuration("SZABOT_MEMORY_TIMEOUT", 30*time.Second).String(), Default: "30s", Description: "记忆提取、Embedding 和索引任务的最长执行时间。", RestartRequired: true},
+			{Key: "qdrant", Env: "SZABOT_QDRANT_ENABLED", Value: status(qdrant), Default: "启用", Description: "启用 Qdrant 向量索引。首次运行不需要它，关闭也不影响 SQLite 关键词记忆。", RestartRequired: true},
+			{Key: "qdrant_url", Env: "SZABOT_QDRANT_URL", Value: value(qdrantURL), Default: "http://127.0.0.1:6333", Description: "Qdrant 服务地址；本机地址会尝试自动管理 Docker 容器。", RestartRequired: true},
+			{Key: "qdrant_collection", Env: "SZABOT_QDRANT_COLLECTION", Value: qdrantCollection, Default: "yomi_memories", Description: "保存记忆向量的 Collection 名称。", RestartRequired: true},
+			{Key: "qdrant_auto_start", Env: "SZABOT_QDRANT_AUTO_START", Value: status(qdrantAutoStart), Default: "本机地址默认启用", Description: "Qdrant 地址为本机时，是否自动启动或复用 Docker 容器。", RestartRequired: true},
+			{Key: "qdrant_index", Value: status(qdrantIndex), Description: "当前是否已经成功建立 Embedding + Qdrant 索引链路。", Status: "运行状态", RestartRequired: true},
+			{Key: "embedding_base_url", Env: "SZABOT_EMBEDDING_BASE_URL", Value: value(embeddingURL), Default: "继承 DEEPSEEK_BASE_URL", Description: "Embedding 服务的 OpenAI-compatible 地址。", RestartRequired: true},
+			{Key: "embedding_model", Env: "SZABOT_EMBEDDING_MODEL", Value: value(embeddingModel), Default: "未设置", Description: "把记忆转换成向量的模型名称。", RestartRequired: true},
+			{Key: "embedding_api_key", Env: "SZABOT_EMBEDDING_API_KEY", Value: embeddingKeyValue, Default: "继承 DEEPSEEK_API_KEY", Description: "Embedding 服务密钥。配置页会显示当前进程拿到的完整值。", Sensitive: true, RestartRequired: true},
+			{Key: "reranker", Env: "SZABOT_RERANKER_ENABLED", Value: status(reranker), Default: "配置模型后自动启用", Description: "对混合召回结果进行更精确的排序。只有 Qdrant + Embedding 已启用时才会执行。", Status: func() string {
+				if rerankerRequested && !reranker {
+					return "配置不完整"
+				}
+				return ""
+			}(), RestartRequired: true},
+			{Key: "reranker_model", Env: "SZABOT_RERANKER_MODEL", Value: value(rerankerModel), Default: "未设置", Description: "Cross-Encoder 重排模型名称，不能用 Embedding 模型替代。", RestartRequired: true},
+			{Key: "reranker_base_url", Env: "SZABOT_RERANKER_BASE_URL", Value: value(rerankerURL), Default: "继承 Embedding 地址", Description: "Reranker 的 OpenAI-compatible 地址。", RestartRequired: true},
+			{Key: "reranker_api_key", Env: "SZABOT_RERANKER_API_KEY", Value: rerankerKeyValue, Default: "继承 Embedding API key", Description: "Reranker 服务密钥。配置页会显示当前进程拿到的完整值。", Sensitive: true, RestartRequired: true},
+			{Key: "reranker_top_n", Env: "SZABOT_RERANKER_TOP_N", Value: strconv.Itoa(envIntDefault("SZABOT_RERANKER_TOP_N", 20)), Default: "20", Description: "送入 Reranker 重排的候选数量。", RestartRequired: true},
+		}},
+		{ID: "tools", Title: "工具与安全", Description: "文件工具默认可用；联网搜索和 Docker 沙盒需要显式准备依赖。", Items: []channels.ConfigItem{
+			{Key: "permission_mode", Env: "SZABOT_PERMISSION_MODE", Value: string(permissionMode()), Default: "safe", Description: "工具写入权限：safe 最严格，workspace_write 允许工作区写入，full 权限最大。", RestartRequired: true},
+			{Key: "skills", Env: "SZABOT_SKILLS", Value: value(os.Getenv("SZABOT_SKILLS")), Default: "未启用", Description: "加载工作区 skills；可填 auto 或逗号分隔的技能名。", RestartRequired: true},
+			{Key: "web_search", Env: "TAVILY_API_KEY", Value: os.Getenv("TAVILY_API_KEY"), Default: "未配置", Description: "配置 Tavily 密钥后注册 web_search 工具；当前值会完整显示。", Sensitive: true, RestartRequired: true},
+			{Key: "sandbox", Env: "SZABOT_SANDBOX", Value: status(os.Getenv("SZABOT_SANDBOX") != ""), Default: "关闭", Description: "启用 Docker 隔离的 bash/python 工具；需要本机 Docker。", RestartRequired: true},
+			{Key: "sandbox_network", Env: "SZABOT_SANDBOX_NETWORK", Value: status(os.Getenv("SZABOT_SANDBOX_NETWORK") != ""), Default: "关闭", Description: "允许沙盒容器联网，默认断网。", RestartRequired: true},
+			{Key: "python_image", Env: "SZABOT_PYTHON_IMAGE", Value: envOr("SZABOT_PYTHON_IMAGE", "python:3.12-slim"), Default: "python:3.12-slim", Description: "Python 沙盒使用的 Docker 镜像。", RestartRequired: true},
+			{Key: "bash_image", Env: "SZABOT_BASH_IMAGE", Value: envOr("SZABOT_BASH_IMAGE", "debian:stable-slim"), Default: "debian:stable-slim", Description: "Bash 沙盒使用的 Docker 镜像。", RestartRequired: true},
+			{Key: "sandbox_tmp_size", Env: "SZABOT_SANDBOX_TMP_SIZE", Value: envOr("SZABOT_SANDBOX_TMP_SIZE", "64m"), Default: "64m", Description: "沙盒容器 /tmp 的大小限制。", RestartRequired: true},
+		}},
+		{ID: "web", Title: "Web 界面", Description: "控制是否启动浏览器界面以及监听地址。", Items: []channels.ConfigItem{
+			{Key: "web_enabled", Env: "SZABOT_WEB", Value: status(os.Getenv("SZABOT_WEB") != ""), Default: "关闭", Description: "设置任意非空值后启动 Web 界面；否则使用 CLI。", RestartRequired: true},
+			{Key: "web_addr", Env: "SZABOT_WEB_ADDR", Value: envOr("SZABOT_WEB_ADDR", ":8080"), Default: ":8080", Description: "Web HTTP 监听地址。", RestartRequired: true},
+		}},
+	}}
+}
+
+func memoryConfigKeyPresent(value string) bool { return strings.TrimSpace(value) != "" }
+
+func runConfigWizard(workspace, configPath string, settings *configstore.Store) {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	view := buildConfigView("echo", "echo", workspace, sessionDir(workspace), 6000, 8, 1200, 1024, 3*time.Minute, memoryExtractionEnabled(providers.EchoProvider{}), qdrantEnabledByConfig(), strings.TrimSpace(os.Getenv("SZABOT_QDRANT_URL")), envOr("SZABOT_QDRANT_COLLECTION", "yomi_memories"), false, false, envOr("SZABOT_EMBEDDING_BASE_URL", os.Getenv("DEEPSEEK_BASE_URL")), strings.TrimSpace(os.Getenv("SZABOT_EMBEDDING_MODEL")), memoryConfigKeyPresent(os.Getenv("SZABOT_EMBEDDING_API_KEY")), rerankerEnabledByConfig(), false, strings.TrimSpace(os.Getenv("SZABOT_RERANKER_BASE_URL")), strings.TrimSpace(os.Getenv("SZABOT_RERANKER_MODEL")), memoryConfigKeyPresent(os.Getenv("SZABOT_RERANKER_API_KEY")))
+	view.Editable = true
+	view.File = configPath
+	web := &channels.WebChannel{ID: "config", Addr: envOr("YOMI_CONFIG_ADDR", ":8080"), Config: view, ConfigStore: settings}
+	if err := web.Start(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "error: start config wizard: %v\n", err)
+		return
+	}
+	addr := envOr("YOMI_CONFIG_ADDR", ":8080")
+	if strings.HasPrefix(addr, ":") {
+		addr = "localhost" + addr
+	}
+	fmt.Printf("yomi configuration wizard. open http://%s/?config=1. saved to %s. Ctrl+C to quit.\n", addr, configPath)
+	<-ctx.Done()
 }
 
 type memoryRuntimeConfig struct {

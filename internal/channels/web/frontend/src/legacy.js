@@ -1,6 +1,8 @@
 // Compatibility controller used during the incremental Vue migration.
 // The DOM/event behavior remains unchanged while the Vue shell owns mounting.
 export function initLegacyController() {
+  const configOnly = new URLSearchParams(window.location.search).get("config") === "1";
+  if (configOnly) document.body.classList.add("config-only");
   const list = document.getElementById("list");
   const messages = document.getElementById("messages");
   const input = document.getElementById("input");
@@ -13,12 +15,16 @@ export function initLegacyController() {
   const traceView = document.getElementById("traceView");
   const chatTab = document.getElementById("chatTab");
   const traceTab = document.getElementById("traceTab");
+  const configTab = document.getElementById("configTab");
   const runSelect = document.getElementById("runSelect");
   const runStatusFilter = document.getElementById("runStatusFilter");
   const traceList = document.getElementById("traceList");
   const traceDetail = document.getElementById("traceDetail");
   const traceStatus = document.getElementById("traceStatus");
   const refreshTrace = document.getElementById("refreshTrace");
+  const configView = document.getElementById("configView");
+  const configContent = document.getElementById("configContent");
+  const refreshConfig = document.getElementById("refreshConfig");
   const sessionList = document.getElementById("sessionList");
   const newSessionBtn = document.getElementById("newSession");
   const sessionSidebar = document.getElementById("sessionSidebar");
@@ -174,12 +180,131 @@ export function initLegacyController() {
 
   function switchView(view) {
     const trace = view === "trace";
-    messagesView.style.display = trace ? "none" : "block";
-    composer.style.display = trace ? "none" : "block";
+    const config = view === "config";
+    messagesView.style.display = trace || config ? "none" : "block";
+    composer.style.display = trace || config ? "none" : "block";
     traceView.style.display = trace ? "flex" : "none";
-    chatTab.classList.toggle("active", !trace);
+    configView.style.display = config ? "flex" : "none";
+    chatTab.classList.toggle("active", !trace && !config);
     traceTab.classList.toggle("active", trace);
+    configTab.classList.toggle("active", config);
     if (trace) loadTraceRuns();
+    if (config) loadConfig();
+  }
+
+  function renderConfig(data) {
+    const fallbackDefaults = {
+      SZABOT_PROVIDER: "echo", DEEPSEEK_BASE_URL: "https://api.deepseek.com/v1", DEEPSEEK_MODEL: "deepseek-chat",
+      SZABOT_MAX_CONTEXT_TOKENS: "6000", SZABOT_CONTEXT_RECENT_MESSAGES: "8", SZABOT_TOOL_RESULT_MAX_TOKENS: "1200",
+      SZABOT_CONTEXT_OUTPUT_RESERVE_TOKENS: "1024", SZABOT_RUN_TIMEOUT: "3m", SZABOT_MEMORY_TIMEOUT: "30s",
+      SZABOT_MAX_INPUT_TOKENS: "0", SZABOT_MAX_OUTPUT_TOKENS: "0", SZABOT_MAX_TOTAL_TOKENS: "0", SZABOT_MAX_MODEL_CALLS: "0", SZABOT_MAX_TOOL_CALLS: "0",
+      SZABOT_QDRANT_URL: "http://127.0.0.1:6333", SZABOT_QDRANT_COLLECTION: "yomi_memories", SZABOT_RERANKER_TOP_N: "20",
+      SZABOT_PERMISSION_MODE: "safe", SZABOT_PYTHON_IMAGE: "python:3.12-slim", SZABOT_BASH_IMAGE: "debian:stable-slim",
+      SZABOT_SANDBOX_TMP_SIZE: "64m", SZABOT_WEB_ADDR: ":8080",
+    };
+    configContent.innerHTML = "";
+    (data.sections || []).forEach(function (section) {
+      const block = document.createElement(section.id === "start" ? "section" : "details");
+      block.className = "config-section";
+      const heading = document.createElement("div");
+      heading.className = "config-section-heading";
+      const title = document.createElement("h3"); title.textContent = section.title;
+      const description = document.createElement("p"); description.textContent = section.description || "";
+      heading.appendChild(title); heading.appendChild(description);
+      if (block.tagName === "DETAILS") {
+        const summary = document.createElement("summary"); summary.className = "config-section-summary";
+        summary.appendChild(heading); block.appendChild(summary);
+      } else {
+        block.appendChild(heading);
+      }
+      (section.items || []).forEach(function (item) {
+        const row = document.createElement("article"); row.className = "config-item";
+        const top = document.createElement("div"); top.className = "config-item-top";
+        const key = document.createElement("code"); key.textContent = item.key;
+        const value = document.createElement("span"); value.className = "config-value";
+        value.textContent = item.value || "未设置";
+        if (item.sensitive) value.textContent = item.value || "未配置";
+        top.appendChild(key); top.appendChild(value); row.appendChild(top);
+        if (item.env) { const env = document.createElement("div"); env.className = "config-env"; env.textContent = item.env; row.appendChild(env); }
+        if (data.editable && item.env && item.env.indexOf(" / ") < 0) {
+          const configured = data.values && Object.prototype.hasOwnProperty.call(data.values, item.env) ? data.values[item.env] : "";
+          const initial = configured || "";
+          const itemValue = item.value === "未设置" || item.value === "未配置" ? "" : (item.value || "");
+          const effective = configured || fallbackDefaults[item.env] || itemValue;
+          const booleanEnv = ["SZABOT_QDRANT_ENABLED", "SZABOT_QDRANT_AUTO_START", "SZABOT_MEMORY_EXTRACTION", "SZABOT_RERANKER_ENABLED", "SZABOT_SANDBOX", "SZABOT_SANDBOX_NETWORK", "SZABOT_WEB"].indexOf(item.env) >= 0;
+          const selectEnv = item.env === "SZABOT_PROVIDER" || item.env === "SZABOT_PERMISSION_MODE" || booleanEnv;
+          const control = selectEnv ? document.createElement("select") : document.createElement("input");
+          control.className = "config-input";
+          control.dataset.env = item.env;
+          control.dataset.initial = initial;
+          if (selectEnv) {
+            const options = item.env === "SZABOT_PROVIDER" ? [["echo", "Echo（本地测试）"], ["deepseek", "DeepSeek"]] : item.env === "SZABOT_PERMISSION_MODE" ? [["safe", "safe（推荐）"], ["workspace_write", "workspace_write"], ["full", "full"]] : [["", "使用默认值"], ["on", "开启"], ["off", "关闭"]];
+            options.forEach(function (option) { const opt = document.createElement("option"); opt.value = option[0]; opt.textContent = option[1]; control.appendChild(opt); });
+            if (initial) {
+              control.value = initial;
+            } else if (item.env === "SZABOT_PROVIDER") {
+              control.value = "echo";
+            } else if (item.env === "SZABOT_PERMISSION_MODE") {
+              control.value = "safe";
+            } else if (item.value === "已启用") {
+              control.value = "on";
+            } else if (item.value === "未启用") {
+              control.value = "off";
+            } else {
+              control.value = "";
+            }
+          } else {
+            control.type = "text";
+            control.value = item.sensitive ? (item.value || initial) : (effective === "unlimited" ? "" : effective);
+            control.placeholder = item.default || "输入值";
+          }
+          row.appendChild(control);
+        }
+        const detail = document.createElement("p"); detail.className = "config-description"; detail.textContent = item.description || ""; row.appendChild(detail);
+        const meta = document.createElement("div"); meta.className = "config-meta";
+        if (item.default) { const def = document.createElement("span"); def.textContent = "默认：" + item.default; meta.appendChild(def); }
+        if (item.status) { const st = document.createElement("span"); st.textContent = item.status; meta.appendChild(st); }
+        if (item.restart_required) { const restart = document.createElement("span"); restart.textContent = "需重启"; meta.appendChild(restart); }
+        row.appendChild(meta); block.appendChild(row);
+      });
+      configContent.appendChild(block);
+    });
+    if (data.editable) {
+      const actions = document.createElement("div"); actions.className = "config-actions";
+      const save = document.createElement("button"); save.textContent = "保存配置";
+      const note = document.createElement("span"); note.textContent = "保存到 " + (data.file || ".yomi/config.json") + "；下次启动生效";
+      save.addEventListener("click", async function () {
+        save.disabled = true;
+        const values = {};
+        configContent.querySelectorAll(".config-input").forEach(function (input) {
+          let value = input.value;
+          if (["SZABOT_SANDBOX", "SZABOT_SANDBOX_NETWORK", "SZABOT_WEB"].indexOf(input.dataset.env) >= 0) {
+            value = value === "on" ? "1" : "";
+          }
+          values[input.dataset.env] = value;
+        });
+        try {
+          const response = await fetch("/api/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) });
+          if (!response.ok) throw new Error("HTTP " + response.status);
+          note.textContent = "已保存。重启 yomi 后生效";
+          await loadConfig();
+        } catch (err) { note.textContent = "保存失败：" + err.message; }
+        save.disabled = false;
+      });
+      actions.appendChild(save); actions.appendChild(note); configContent.appendChild(actions);
+    }
+    if (!configContent.children.length) configContent.innerHTML = '<div class="config-empty">暂无配置数据</div>';
+  }
+
+  async function loadConfig() {
+    configContent.innerHTML = '<div class="config-empty">加载配置中…</div>';
+    try {
+      const response = await fetch("/api/config");
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      renderConfig(await response.json());
+    } catch (err) {
+      configContent.innerHTML = '<div class="config-empty">无法读取配置：' + err.message + '</div>';
+    }
   }
 
   function setStatus(text, online) {
@@ -859,11 +984,18 @@ export function initLegacyController() {
   sessionToggle.addEventListener("click", function () { sessionSidebar.classList.toggle("open"); });
   chatTab.addEventListener("click", function () { switchView("chat"); });
   traceTab.addEventListener("click", function () { switchView("trace"); });
+  configTab.addEventListener("click", function () { switchView("config"); });
   runSelect.addEventListener("change", function () { loadTraceRun(runSelect.value); });
   runStatusFilter.addEventListener("change", loadTraceRuns);
   refreshTrace.addEventListener("click", loadTraceRuns);
+  refreshConfig.addEventListener("click", loadConfig);
 
-  loadSessions();
-  loadHistory().finally(connect);
-  input.focus();
+  if (configOnly) {
+    setStatus("配置向导", true);
+    switchView("config");
+  } else {
+    loadSessions();
+    loadHistory().finally(connect);
+    input.focus();
+  }
 }
