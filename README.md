@@ -7,6 +7,79 @@
 一个用 Go 实现的轻量 Agent 框架。yomi 先用少量角色组成一条稳定的核心循环，再把接入方式、工具、技能和模型能力放到循环边缘扩展。
 
 > 项目名称统一为 **yomi**。当前代码入口 `cmd/szabot`、环境变量 `SZABOT_*` 以及部分存储路径仍保留早期技术标识，以兼容现有用法。
+
+## 系统总架构
+
+下面的图展示 yomi 从用户输入到模型响应，以及工具、记忆和运行数据如何接入核心循环：
+
+```mermaid
+flowchart LR
+    subgraph Channels["Channels · 接入层"]
+        CLI["CLI<br/>stdin / stdout"]
+        WEB["Web<br/>HTTP + SSE"]
+    end
+
+    subgraph Core["Agent Core · 核心循环"]
+        BUS["MessageBus<br/>Inbound / Outbound"]
+        LOOP["AgentLoop<br/>Session FIFO · Run lifecycle"]
+        CTX["ContextManager<br/>history · summary · memory"]
+        RUNNER["AgentRunner<br/>model + tool loop"]
+    end
+
+    subgraph Providers["Providers · 模型接入"]
+        ECHO["Echo Provider"]
+        OPENAI["OpenAI-compatible<br/>DeepSeek · OpenAI · Ollama"]
+    end
+
+    subgraph Extensions["Extensions · 能力边界"]
+        TOOLS["Tool Registry<br/>file · web · sandbox"]
+        SKILLS["Skills<br/>L1 summary → L2 read"]
+        MEMORY["Memory<br/>SQLite · FTS5"]
+        VECTOR["Optional retrieval<br/>Embedding · Qdrant · Reranker"]
+    end
+
+    subgraph RuntimeData["Runtime Data · 运行数据"]
+        CONV["Conversation<br/>conversations/*.jsonl"]
+        TRACE["Trace<br/>traces/*.jsonl"]
+        SNAP["Run Snapshot<br/>runs/*.json"]
+        ARTIFACT["Artifacts<br/>large tool results"]
+    end
+
+    CLI --> BUS
+    WEB --> BUS
+    BUS --> LOOP
+    LOOP --> CTX
+    CTX --> RUNNER
+    RUNNER --> ECHO
+    RUNNER --> OPENAI
+    RUNNER --> TOOLS
+    SKILLS -. "装配 system prompt" .-> CTX
+    CTX --> MEMORY
+    MEMORY -. "可选增强" .-> VECTOR
+    LOOP --> CONV
+    LOOP --> TRACE
+    LOOP --> SNAP
+    RUNNER --> TRACE
+    TOOLS --> ARTIFACT
+    LOOP --> BUS
+    BUS --> CLI
+    BUS --> WEB
+
+    classDef channel fill:#ede9fe,stroke:#8b5cf6,color:#24104f,stroke-width:2px;
+    classDef core fill:#f5f3ff,stroke:#6d28d9,color:#24104f,stroke-width:2px;
+    classDef provider fill:#fce7f3,stroke:#db2777,color:#4a102c,stroke-width:2px;
+    classDef extension fill:#e0f2fe,stroke:#0284c7,color:#082f49,stroke-width:2px;
+    classDef data fill:#fef3c7,stroke:#d97706,color:#451a03,stroke-width:2px;
+
+    class CLI,WEB channel;
+    class BUS,LOOP,CTX,RUNNER core;
+    class ECHO,OPENAI provider;
+    class TOOLS,SKILLS,MEMORY,VECTOR extension;
+    class CONV,TRACE,SNAP,ARTIFACT data;
+```
+
+核心原则是 **Core stays small; extend at the edges**：Channel 负责平台翻译，Provider 负责模型协议，工具和技能负责能力扩展，Agent Core 只负责编排消息、上下文与 Run 生命周期。
+
 ## 目录结构
 
 ```
