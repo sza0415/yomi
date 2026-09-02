@@ -151,7 +151,7 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
-// ClearAll permanently removes all canonical memories, events, and FTS rows.
+// ClearAll 永久删除所有权威记忆、事件以及全文搜索（FTS）记录。
 func (s *SQLiteStore) ClearAll(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return nil
@@ -350,8 +350,8 @@ func (s *SQLiteStore) Search(ctx context.Context, query Query) ([]Memory, error)
 	if len(items) > 0 || text == "" {
 		return items, nil
 	}
-	// FTS tokenization is intentionally supplemented with a substring fallback;
-	// this keeps short IDs and languages without whitespace searchable.
+	// 在 FTS 分词之外有意补充子字符串回退检索，确保短 ID 和不使用空格分词的
+	// 语言内容仍然可以被搜索到。
 	args := []any{query.UserID}
 	args = append(args, kindArgs...)
 	args = append(args, now, "%"+text+"%", "%"+text+"%", limit)

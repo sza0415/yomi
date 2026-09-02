@@ -11,9 +11,8 @@ import (
 	"time"
 )
 
-// HTTPReranker speaks the common rerank API shape used by hosted and local
-// cross-encoder services. The response order is converted back to Memory
-// objects by index; the canonical text never comes from the remote payload.
+// HTTPReranker 使用托管和本地交叉编码器服务通用的重排 API 格式。
+// 响应顺序会按照索引重新映射为 Memory 对象；权威正文绝不会取自远程响应内容。
 type HTTPReranker struct {
 	BaseURL    string
 	APIKey     string

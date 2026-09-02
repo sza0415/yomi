@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// RunSnapshot is the durable, task-level state needed for inspection and
-// conservative restart handling. Conversation messages remain in SessionStore.
+// RunSnapshot 是用于检查任务和保守处理重启场景的可持久化任务级状态。
+// 对话消息仍然保存在 SessionStore 中。
 type RunSnapshot struct {
 	ID           string         `json:"run_id"`
 	SessionID    string         `json:"session_id"`
@@ -29,7 +29,7 @@ type RunSnapshot struct {
 	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
-// Snapshot returns a consistent copy of the Run's durable fields.
+// Snapshot 返回 Run 可持久化字段的一致性副本。
 func (r *Run) Snapshot() RunSnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -41,8 +41,8 @@ func (r *Run) Snapshot() RunSnapshot {
 	}
 }
 
-// RunSnapshotStore persists task-level snapshots and can mark unfinished runs
-// after a process restart. It deliberately does not replay tools.
+// RunSnapshotStore 持久化任务级快照，并能在进程重启后标记未完成的 Run。
+// 为避免产生副作用，它不会重新执行工具。
 type RunSnapshotStore interface {
 	Save(RunSnapshot) error
 	Load(runID string) (RunSnapshot, error)
@@ -50,7 +50,7 @@ type RunSnapshotStore interface {
 	MarkInterrupted() ([]RunSnapshot, error)
 }
 
-// JSONRunSnapshotStore stores one atomically replaced JSON file per Run.
+// JSONRunSnapshotStore 为每个 Run 保存一个以原子替换方式更新的 JSON 文件。
 type JSONRunSnapshotStore struct {
 	dir string
 	mu  sync.Mutex
@@ -134,7 +134,7 @@ func (s *JSONRunSnapshotStore) Load(runID string) (RunSnapshot, error) {
 	return snapshot, nil
 }
 
-// List returns snapshots newest first. An empty sessionID lists all sessions.
+// List 按从新到旧的顺序返回快照；sessionID 为空时返回所有会话的快照。
 func (s *JSONRunSnapshotStore) List(sessionID string) ([]RunSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

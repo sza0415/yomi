@@ -20,9 +20,8 @@ type Resolution struct {
 	Reason     string
 }
 
-// ResolveCandidate is intentionally conservative. Structured memories only
-// replace an existing value when extraction captured an explicit replacement
-// signal; otherwise different values in the same slot become conflicts.
+// ResolveCandidate 有意采用保守策略。只有提取阶段捕获到明确的替换信号时，
+// 结构化记忆才会替换已有值；否则，同一位置上的不同值会被标记为冲突。
 func ResolveCandidate(existing []Memory, candidate Candidate) Resolution {
 	candidateContent := normalizeText(candidate.Content)
 	candidateSubject := normalizeKey(candidate.Subject)
@@ -56,9 +55,8 @@ func ResolveCandidate(existing []Memory, candidate Candidate) Resolution {
 		if itemAttribute == candidateAttribute && itemValue == candidateValue {
 			return Resolution{Action: ResolutionDuplicate, RelatedIDs: []string{item.ID}, Reason: "same normalized subject, attribute, and value"}
 		}
-		// Legacy unstructured memories can only be deduplicated by normalized
-		// text. Without an attribute key, treating similar prose as a conflict
-		// would create false positives across unrelated facts.
+		// 旧版非结构化记忆只能根据规范化后的文本去重。如果没有属性键，
+		// 把相似表述视为冲突会在互不相关的事实之间产生误判。
 		if candidateAttribute == "" || itemAttribute == "" {
 			if itemContent == candidateContent {
 				return Resolution{Action: ResolutionDuplicate, RelatedIDs: []string{item.ID}, Reason: "same normalized content"}
@@ -83,9 +81,8 @@ func ResolveCandidate(existing []Memory, candidate Candidate) Resolution {
 	return Resolution{Action: ResolutionConflict, RelatedIDs: ids, Reason: "different values for the same subject and attribute without a clear replacement"}
 }
 
-// SanitizeChangeHint prevents a model from silently replacing a fact when the
-// source message contains no explicit change signal. A replacement is a
-// destructive state transition; an uncertain hint is downgraded to conflict.
+// SanitizeChangeHint 防止模型在原始消息没有明确变化信号时静默替换事实。
+// 替换属于破坏性状态转换，因此不确定的变化提示会被降级为冲突。
 func SanitizeChangeHint(candidate Candidate, sourceText string) Candidate {
 	if normalizeChangeHint(candidate.ChangeHint) == ChangeHintReplace && !explicitReplacementSignal(sourceText) {
 		candidate.ChangeHint = ChangeHintUnknown

@@ -38,8 +38,8 @@ type Extractor interface {
 	Extract(ctx context.Context, input ExtractionInput) ([]Candidate, error)
 }
 
-// LLMExtractor asks the configured Provider for a small JSON-only memory
-// proposal. The proposal is still untrusted and must pass Policy before write.
+// LLMExtractor 请求已配置的 Provider 生成一份仅包含 JSON 的精简记忆提案。
+// 该提案仍属于不可信输入，写入前必须通过 Policy 检查。
 type LLMExtractor struct {
 	Provider providers.Provider
 	Model    string

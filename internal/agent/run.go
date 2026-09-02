@@ -108,9 +108,8 @@ func (r *Run) setError(err error) {
 	r.mu.Unlock()
 }
 
-// Transition changes the lifecycle state of a Run after validating the
-// allowed transition. Run is the task-level state machine; model and tool
-// execution states are reported separately by Runner events.
+// Transition 在确认状态转换合法后修改 Run 的生命周期状态。
+// Run 是任务级状态机；模型和工具的执行状态由 Runner 事件分别报告。
 func (r *Run) Transition(to RunStatus, reason string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
