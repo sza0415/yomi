@@ -17,6 +17,6 @@
 /sessionlogs/
 *.local.json
 
-# Independent frontend dependencies and local build output
-/web/node_modules/
-/web/dist/
+# Frontend dependencies and local build output
+node_modules/
+dist/
