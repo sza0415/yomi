@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/ziangsun/szabot/internal/providers"
 )
+
+const encodedSessionNamePrefix = "yomi-session-b64-"
 
 // SessionStore 按 SessionID 持久化对话历史（M8）。
 //
@@ -128,7 +131,7 @@ func (s *SessionStore) ListSessions() ([]SessionInfo, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 			continue
 		}
-		sessionID := strings.TrimSuffix(entry.Name(), ".jsonl")
+		sessionID := decodeSessionName(strings.TrimSuffix(entry.Name(), ".jsonl"))
 		if sessionID == "" {
 			continue
 		}
@@ -321,12 +324,7 @@ func (s *SessionStore) LoadArchives(sessionID string) ([]ArchiveRecord, error) {
 }
 
 func (s *SessionStore) path(sessionID string) string {
-	// 清洗 sessionID，避免路径穿越（如 "../x"）。
-	safe := filepath.Base(filepath.Clean("/" + sessionID))
-	if safe == "." || safe == "/" || safe == "" {
-		safe = "default"
-	}
-	return filepath.Join(s.dir, safe+".jsonl")
+	return filepath.Join(s.dir, s.safeSessionName(sessionID)+".jsonl")
 }
 
 func (s *SessionStore) summaryPath(sessionID string) string {
@@ -342,7 +340,45 @@ func (s *SessionStore) safeSessionName(sessionID string) string {
 	if safe == "." || safe == "/" || safe == "" {
 		return "default"
 	}
-	return safe
+	if isPortableFilePart(safe) && !strings.HasPrefix(safe, encodedSessionNamePrefix) {
+		return safe
+	}
+	return encodedSessionNamePrefix + base64.RawURLEncoding.EncodeToString([]byte(safe))
+}
+
+func decodeSessionName(stored string) string {
+	if !strings.HasPrefix(stored, encodedSessionNamePrefix) {
+		return stored
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(stored, encodedSessionNamePrefix))
+	if err != nil || len(decoded) == 0 {
+		return stored
+	}
+	return string(decoded)
+}
+
+// isPortableFilePart applies Windows filename restrictions on every OS so a
+// workspace remains portable between operating systems.
+func isPortableFilePart(value string) bool {
+	if value == "" || value == "." || value == ".." || strings.HasSuffix(value, ".") || strings.HasSuffix(value, " ") {
+		return false
+	}
+	if strings.ContainsAny(value, `<>:"/\|?*`) {
+		return false
+	}
+	for _, r := range value {
+		if r < 32 {
+			return false
+		}
+	}
+	base := strings.ToUpper(strings.SplitN(value, ".", 2)[0])
+	if base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" {
+		return false
+	}
+	if len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '1' && base[3] <= '9' {
+		return false
+	}
+	return true
 }
 
 func (s *SessionStore) readFile(sessionID string) ([]providers.Message, error) {

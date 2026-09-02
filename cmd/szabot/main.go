@@ -4,7 +4,7 @@
 //  1. 创建一条 MessageBus；
 //  2. 根据环境变量选择 Provider（echo / deepseek）；
 //  3. 用 bus + runner 创建 AgentLoop 并启动；
-//  4. 二选一起前端 channel：SZABOT_WEB 起 Web，否则起 CLI；
+//  4. 二选一起交互 channel：SZABOT_WEB 起 HTTP/SSE API，否则起 CLI；
 //  5. 等系统信号退出。
 //
 // 没有任何业务逻辑，所有逻辑都被关在了对应的 package 里——
@@ -286,11 +286,11 @@ func main() {
 		RerankerTopN:        envIntDefault("SZABOT_RERANKER_TOP_N", 20),
 	})
 
-	// 4. 选择前端 channel。
+	// 4. 选择交互 channel。
 	//
 	// CLI 与 Web 都监听同一条 bus.Outbound()，两者一起跑会互相抢消息，
 	// 因此这里二选一：设置了 SZABOT_WEB 就起 Web，否则维持原来的 CLI 行为。
-	//   - SZABOT_WEB=1            启用 Web 界面（默认监听 :8080）
+	//   - SZABOT_WEB=1            启用前端所需的 HTTP/SSE API（默认监听 :8080）
 	//   - SZABOT_WEB_ADDR=:9000   自定义监听地址
 	if os.Getenv("SZABOT_WEB") != "" {
 		addr := envOr("SZABOT_WEB_ADDR", ":8080")
@@ -311,7 +311,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: start web channel: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("yomi started. provider=%s model=%s. open http://localhost%s in your browser. Ctrl+C to quit.\n",
+		fmt.Printf("yomi started. provider=%s model=%s. web API listening on %s; start the frontend with: cd web && npm run dev. Ctrl+C to quit.\n",
 			provider.Name(), model, addr)
 	} else {
 		// CLIChannel：stdin → bus 入站；bus 出站 → stdout。

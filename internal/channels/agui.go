@@ -215,10 +215,11 @@ func (t *aguiTranslator) handleToolCall(out bus.OutboundMessage) error {
 // handleToolResult 处理工具结果：TOOL_CALL_RESULT，用 toolCallId 与调用配对。
 func (t *aguiTranslator) handleToolResult(out bus.OutboundMessage) error {
 	return t.emit.send("TOOL_CALL_RESULT", map[string]any{
-		"messageId":  newID(),
-		"toolCallId": out.ToolCallID,
-		"content":    out.Text,
-		"role":       "tool",
+		"messageId":    newID(),
+		"toolCallId":   out.ToolCallID,
+		"toolCallName": out.ToolName,
+		"content":      out.Text,
+		"role":         "tool",
 	})
 }
 
@@ -228,12 +229,17 @@ func (t *aguiTranslator) handleQuestion(out bus.OutboundMessage) error {
 	if err := t.closeOpenMessages(); err != nil {
 		return err
 	}
-	value := map[string]any{"question": out.Text}
+	question := out.Text
+	if raw, ok := out.Meta["question"].(string); ok && raw != "" {
+		question = raw
+	}
+	value := map[string]any{"question": question}
 	if opts, ok := out.Meta["options"].([]string); ok && len(opts) > 0 {
 		value["options"] = opts
 	}
 	return t.emit.send("CUSTOM", map[string]any{
 		"name":  "ASK_USER_QUESTION",
+		"runId": t.runID,
 		"value": value,
 	})
 }

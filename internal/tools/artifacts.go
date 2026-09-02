@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -181,6 +182,16 @@ func safeArtifactPart(value string) string {
 	safe := filepath.Base(filepath.Clean("/" + value))
 	if safe == "." || safe == "/" || safe == "" {
 		return "default"
+	}
+	// ':' is an NTFS alternate-data-stream separator; the other characters are
+	// likewise invalid in Windows file and directory names.
+	if strings.ContainsAny(safe, `<>:"/\|?*`) || strings.HasSuffix(safe, ".") || strings.HasSuffix(safe, " ") {
+		return "yomi-artifact-b64-" + base64.RawURLEncoding.EncodeToString([]byte(safe))
+	}
+	for _, r := range safe {
+		if r < 32 {
+			return "yomi-artifact-b64-" + base64.RawURLEncoding.EncodeToString([]byte(safe))
+		}
 	}
 	return safe
 }

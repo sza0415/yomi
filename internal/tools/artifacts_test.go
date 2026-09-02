@@ -28,6 +28,16 @@ func TestArtifactStorePutReadAndSessionIsolation(t *testing.T) {
 	}
 }
 
+func TestSafeArtifactPartEncodesWindowsInvalidCharacters(t *testing.T) {
+	got := safeArtifactPart("web:session-a")
+	if strings.ContainsAny(got, `<>:"/\|?*`) {
+		t.Fatalf("safeArtifactPart() = %q, contains a Windows-invalid character", got)
+	}
+	if got == "web:session-a" {
+		t.Fatal("safeArtifactPart() did not encode unsafe session ID")
+	}
+}
+
 func TestArtifactReadToolUsesSessionFromContext(t *testing.T) {
 	store, err := NewArtifactStore(t.TempDir())
 	if err != nil {

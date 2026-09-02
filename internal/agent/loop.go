@@ -684,7 +684,9 @@ func (l *Loop) Ask(ctx context.Context, question string, options []string) (stri
 		out.Sequence = run.nextSequence()
 	}
 	if len(options) > 0 {
-		out.Meta = map[string]any{"options": options}
+		out.Meta = map[string]any{"question": question, "options": options}
+	} else {
+		out.Meta = map[string]any{"question": question}
 	}
 	if err := l.Bus.PublishOutbound(ctx, out); err != nil {
 		if run, ok := runFrom(ctx); ok {
