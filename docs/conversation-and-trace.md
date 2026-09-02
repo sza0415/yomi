@@ -89,7 +89,7 @@ cli:local
 sessionlogs/conversations/cli:local.jsonl
 ```
 
-Web 前端通常生成 `web:<时间戳>:<随机串>` 并写入浏览器 `localStorage`；服务端在客户端未提供 SessionID 时也可以生成 `web:<UnixNano>`。SessionID 是路由标识，不是身份认证凭据。
+Web 前端通常生成 `web:<时间戳>:<随机串>` 并写入浏览器 `localStorage`；服务端在客户端未提供 SessionID 时也可以生成 `web:<UnixNano>`。SessionID 是路由标识，不是身份认证凭据。长期记忆使用独立的 `UserID` 作用域；Web 默认从 `SZABOT_USER_ID`（默认 `local`）启动，也支持在页面顶栏运行时切换，切换后不会随新 Session 改变。
 
 文件路径会通过 `filepath.Clean` 和 `filepath.Base` 清洗，避免 `../` 逃出目录。但这不是无碰撞编码，例如不同原始 ID 可能被清洗成相同文件名，因此 SessionID 应由可信 Channel 按约定生成。
 

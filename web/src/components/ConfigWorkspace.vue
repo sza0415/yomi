@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Check, Eye, EyeOff, RefreshCw, RotateCcw, Save, Settings2 } from "../icons";
 import { computed, onMounted, reactive, ref } from "vue";
-import { fetchConfig, saveConfig } from "../api";
+import { fetchConfig, resetDebugData, saveConfig } from "../api";
 import type { ConfigItem, ConfigView } from "../types";
 
 const config = ref<ConfigView | null>(null);
@@ -11,6 +11,7 @@ const loading = ref(false);
 const saving = ref(false);
 const message = ref("");
 const error = ref("");
+const resetting = ref(false);
 const activeSection = ref("");
 
 const sections = computed(() => config.value?.sections ?? []);
@@ -59,6 +60,22 @@ async function save(): Promise<void> {
   }
 }
 
+async function resetData(): Promise<void> {
+  if (resetting.value || !window.confirm("将永久删除所有会话、Trace、Run、Artifact、SQLite 记忆和 Qdrant 向量。确定继续吗？")) return;
+  resetting.value = true;
+  error.value = "";
+  message.value = "";
+  try {
+    await resetDebugData();
+    message.value = "调试数据已清空";
+    window.dispatchEvent(new CustomEvent("yomi-data-reset"));
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    resetting.value = false;
+  }
+}
+
 onMounted(load);
 </script>
 
@@ -68,6 +85,7 @@ onMounted(load);
       <div><span class="eyebrow">CONFIGURATION</span><h1>运行配置</h1><p>管理模型、上下文、长期记忆和工具能力。</p></div>
       <div class="heading-actions">
         <button class="secondary-button" type="button" :disabled="loading" @click="load"><RefreshCw :size="16" :class="{ spin: loading }" />刷新</button>
+        <button class="danger-button" type="button" :disabled="resetting" @click="resetData"><RotateCcw :size="16" />{{ resetting ? "清空中" : "清空调试数据" }}</button>
         <button v-if="config?.editable" class="primary-button" type="button" :disabled="saving" @click="save"><Save :size="16" />{{ saving ? "保存中" : "保存配置" }}</button>
       </div>
     </section>

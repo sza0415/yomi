@@ -151,6 +151,27 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
+// ClearAll permanently removes all canonical memories, events, and FTS rows.
+func (s *SQLiteStore) ClearAll(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("memory: begin clear: %w", err)
+	}
+	defer tx.Rollback()
+	for _, statement := range []string{"DELETE FROM memory_events", "DELETE FROM memories", "DELETE FROM memory_fts"} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("memory: clear data: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("memory: commit clear: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) Upsert(ctx context.Context, item Memory) error {
 	return s.ApplyMutation(ctx, Mutation{Memory: item})
 }

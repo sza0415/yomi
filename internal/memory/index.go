@@ -30,6 +30,10 @@ type Indexer interface {
 	Delete(ctx context.Context, ids []string) error
 }
 
+type Resetter interface {
+	Reset(ctx context.Context) error
+}
+
 type SemanticHit struct {
 	ID    string
 	Score float64
@@ -159,6 +163,14 @@ func (q *QdrantIndexer) Delete(ctx context.Context, ids []string) error {
 		points = append(points, qdrantPointID(id))
 	}
 	return q.doJSON(ctx, http.MethodPost, "/collections/"+q.config.Collection+"/points/delete?wait=true", map[string]any{"points": points}, nil)
+}
+
+func (q *QdrantIndexer) Reset(ctx context.Context) error {
+	err := q.doJSON(ctx, http.MethodDelete, "/collections/"+q.config.Collection, nil, nil)
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "404") {
+		return err
+	}
+	return nil
 }
 
 func (q *QdrantIndexer) Search(ctx context.Context, vector []float32, query Query) ([]SemanticHit, error) {

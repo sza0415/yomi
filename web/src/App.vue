@@ -9,9 +9,10 @@ import {
   PanelLeftOpen,
   Settings,
   Square,
+  UserRound,
 } from "./icons";
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { cancelRun, fetchHistory, fetchSessions, sendMessage } from "./api";
+import { cancelRun, fetchHistory, fetchIdentity, fetchSessions, sendMessage, switchIdentity } from "./api";
 import ChatMessage from "./components/ChatMessage.vue";
 import SessionSidebar from "./components/SessionSidebar.vue";
 import type { AgentActivity, AguiEvent, ChatMessage as ChatMessageType, ConversationHistory, HistoryMessage, HistoryTurn, SessionInfo, ViewName } from "./types";
@@ -24,6 +25,9 @@ const initialSession = new URLSearchParams(window.location.search).get("session"
 
 const activeView = ref<ViewName>(configOnly ? "config" : "chat");
 const session = ref(initialSession);
+const userID = ref("local");
+const userDraft = ref("local");
+const switchingUser = ref(false);
 const sessions = ref<SessionInfo[]>([]);
 const messages = ref<ChatMessageType[]>([]);
 const input = ref("");
@@ -241,13 +245,45 @@ function applyHistory(history: ConversationHistory): void {
 }
 
 async function loadInitialData(): Promise<void> {
-  const [sessionResult, historyResult] = await Promise.allSettled([
+  const [identityResult, sessionResult, historyResult] = await Promise.allSettled([
+    fetchIdentity(),
     fetchSessions(),
     fetchHistory(session.value),
   ]);
+  if (identityResult.status === "fulfilled" && identityResult.value.user_id) userID.value = identityResult.value.user_id;
+  userDraft.value = userID.value;
   if (sessionResult.status === "fulfilled") sessions.value = sessionResult.value;
   if (historyResult.status === "fulfilled") applyHistory(historyResult.value);
   else messages.value = [{ id: newLocalID("notice"), role: "notice", content: `历史加载失败：${historyResult.reason}`, activities: [] }];
+}
+
+async function changeUser(): Promise<void> {
+  const nextUser = userDraft.value.trim();
+  if (!nextUser || nextUser === userID.value || busy.value || switchingUser.value) return;
+  switchingUser.value = true;
+  try {
+    const result = await switchIdentity(nextUser);
+    userID.value = result.user_id;
+    userDraft.value = result.user_id;
+    finishCurrentAssistant();
+    pendingApprovalTarget = null;
+    textMessageMap.clear();
+    reasoningMessageMap.clear();
+    toolCallMap.clear();
+    pendingText.clear();
+    pendingReasoning.clear();
+    messages.value = [];
+    session.value = newSessionID();
+    updateSessionLocation();
+    await refreshSessions();
+    connect();
+    scrollToBottom();
+  } catch (cause) {
+    userDraft.value = userID.value;
+    messages.value.push({ id: newLocalID("notice"), role: "notice", content: `切换用户失败：${cause instanceof Error ? cause.message : String(cause)}`, activities: [] });
+  } finally {
+    switchingUser.value = false;
+  }
 }
 
 async function refreshSessions(): Promise<void> {
@@ -532,7 +568,23 @@ function handleComposerKeydown(event: KeyboardEvent): void {
   }
 }
 
+function handleDataReset(): void {
+  finishCurrentAssistant();
+  pendingApprovalTarget = null;
+  textMessageMap.clear();
+  reasoningMessageMap.clear();
+  toolCallMap.clear();
+  pendingText.clear();
+  pendingReasoning.clear();
+  messages.value = [];
+  sessions.value = [];
+  session.value = newSessionID();
+  updateSessionLocation();
+  connect();
+}
+
 onMounted(async () => {
+	window.addEventListener("yomi-data-reset", handleDataReset);
   updateSessionLocation();
   if (!configOnly) {
     await loadInitialData();
@@ -543,6 +595,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+	window.removeEventListener("yomi-data-reset", handleDataReset);
   eventSource?.close();
   if (animationFrame) cancelAnimationFrame(animationFrame);
 });
@@ -571,6 +624,11 @@ onBeforeUnmount(() => {
           </button>
           <div class="brand-mark"><BrainCircuit :size="20" /></div>
           <div class="brand-copy"><strong>Yomi</strong><span>Personal Agent</span></div>
+          <form v-if="!configOnly" class="user-identity" title="切换后将隔离记忆与会话历史" @submit.prevent="changeUser">
+            <UserRound :size="14" />
+            <input v-model="userDraft" aria-label="用户 ID" :disabled="busy || switchingUser" />
+            <button type="submit" :disabled="busy || switchingUser || !userDraft.trim() || userDraft.trim() === userID" title="切换用户"><Check :size="14" /></button>
+          </form>
         </div>
 
         <nav v-if="!configOnly" class="view-tabs" aria-label="页面导航">

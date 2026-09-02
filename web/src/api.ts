@@ -22,6 +22,22 @@ export async function fetchSessions(): Promise<SessionInfo[]> {
   return data.sessions ?? [];
 }
 
+export async function fetchIdentity(): Promise<{ user_id: string }> {
+  return requestJSON<{ user_id: string }>("/api/identity");
+}
+
+export async function switchIdentity(userID: string): Promise<{ user_id: string }> {
+  return requestJSON<{ user_id: string }>("/api/identity", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: userID }),
+  });
+}
+
+export async function resetDebugData(): Promise<void> {
+  await requestJSON("/api/debug/reset", { method: "POST" });
+}
+
 export async function fetchHistory(session: string): Promise<ConversationHistory> {
   const query = encodeURIComponent(session);
   const data = await requestJSON<{ messages?: HistoryMessage[]; turns?: HistoryTurn[] }>(`/api/session/messages?session=${query}`);
