@@ -370,6 +370,18 @@ func TestBuildSessionTimelineRestoresAgentActivities(t *testing.T) {
 	}
 }
 
+func TestBuildSessionTimelineClosesApprovalWhenRunTerminates(t *testing.T) {
+	now := time.Now()
+	turns := buildSessionTimeline([]tracing.Event{
+		{Sequence: 1, Timestamp: now, SessionID: "S", RunID: "R", Type: tracing.EventInputReceived, Data: map[string]any{"content": "搜索"}},
+		{Sequence: 2, Timestamp: now, SessionID: "S", RunID: "R", Type: tracing.EventUserQuestionAsked, Status: "waiting_user", Data: map[string]any{"question": "Allow web search?", "options": []string{"Allow once", "Deny"}}},
+		{Sequence: 3, Timestamp: now, SessionID: "S", RunID: "R", Type: tracing.EventRunFinished, Status: "timed_out"},
+	})
+	if len(turns) != 1 || len(turns[0].Activities) != 1 || turns[0].Activities[0].Status != "failed" {
+		t.Fatalf("terminal approval timeline = %#v", turns)
+	}
+}
+
 // TestDeliverRoutesBySession 验证出站消息只投给匹配 SessionID 的订阅者，
 // 其他 session 的订阅者收不到——这是 Web 多连接场景的核心正确性。
 func TestDeliverRoutesBySession(t *testing.T) {
@@ -397,6 +409,26 @@ func TestDeliverRoutesBySession(t *testing.T) {
 		t.Fatalf("subB should NOT receive session A's message, got %q", out.Text)
 	case <-time.After(50 * time.Millisecond):
 		// 正确：B 收不到。
+	}
+}
+
+func TestDeliverKeepsQuestionAndDoneWhenSubscriberQueueIsFull(t *testing.T) {
+	w := newTestWeb(bus.New(16))
+	sub := &subscriber{sessionID: "S", events: make(chan bus.OutboundMessage, 1)}
+	w.addSubscriber(sub)
+
+	// 模拟断点恢复后代理尚未及时消费：队列里已经积压一条普通增量。
+	sub.events <- bus.OutboundMessage{SessionID: "S", Text: "stale", Delta: true}
+	question := bus.OutboundMessage{SessionID: "S", RunID: "run-1", Kind: bus.KindQuestion, Text: "Allow tool?"}
+	w.deliver(question)
+	if got := <-sub.events; got.Kind != bus.KindQuestion {
+		t.Fatalf("full queue kept %q, want permission question", got.Kind)
+	}
+
+	sub.events <- bus.OutboundMessage{SessionID: "S", Text: "stale", Delta: true}
+	w.deliver(bus.OutboundMessage{SessionID: "S", RunID: "run-1", Done: true})
+	if got := <-sub.events; !got.Done {
+		t.Fatalf("full queue kept %#v, want run done", got)
 	}
 }
 

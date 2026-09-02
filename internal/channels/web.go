@@ -215,8 +215,19 @@ func (w *WebChannel) deliver(out bus.OutboundMessage) {
 		select {
 		case s.events <- out:
 		default:
-			// 订阅者的队列满了（前端消费不过来）就丢弃这一条，
-			// 保证 dispatch 永不阻塞，不拖垮整个出站链路。
+			// 思考/正文增量允许由 History/Trace 恢复，但等待用户确认和 Run
+			// 收尾不能丢，否则前端会永久停在“运行中”。队列满时淘汰一条
+			// 较旧事件，给关键控制事件留出位置，同时保证 dispatch 不阻塞。
+			if out.Kind == bus.KindQuestion || out.Done {
+				select {
+				case <-s.events:
+				default:
+				}
+				select {
+				case s.events <- out:
+				default:
+				}
+			}
 		}
 	}
 }
@@ -589,6 +600,21 @@ func buildSessionTimeline(events []tracing.Event) []sessionTurnView {
 			}
 		case tracing.EventRunFinished:
 			turn.Status = event.Status
+			// Run 已结束后不应再把历史授权卡恢复成可操作的 waiting 状态。
+			// 断点/超时经常发生在等待授权期间；若缺少 answered 事件，就把
+			// 该卡标成失败，避免页面重连后向一个已结束的 Run 继续提交答案。
+			for index := range turn.Activities {
+				activity := &turn.Activities[index]
+				if activity.Kind == "approval" && activity.Status == "waiting" {
+					activity.Status = "failed"
+				} else if activity.Status == "running" {
+					if event.Status == string(agent.RunCompleted) {
+						activity.Status = "completed"
+					} else {
+						activity.Status = "failed"
+					}
+				}
+			}
 		}
 	}
 
@@ -1000,11 +1026,12 @@ func (w *WebChannel) handleStream(rw http.ResponseWriter, r *http.Request) {
 	rw.Header().Set("Content-Type", "text/event-stream")
 	rw.Header().Set("Cache-Control", "no-cache")
 	rw.Header().Set("Connection", "keep-alive")
+	rw.Header().Set("X-Accel-Buffering", "no")
 
 	sub := &subscriber{
 		sessionID: session,
 		// 缓冲给足，突发的流式增量不至于因为瞬时消费慢而被 deliver 丢弃。
-		events: make(chan bus.OutboundMessage, 256),
+		events: make(chan bus.OutboundMessage, 2048),
 	}
 	w.addSubscriber(sub)
 	defer w.removeSubscriber(sub)

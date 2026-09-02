@@ -16,6 +16,7 @@
 .yomi/
 /sessionlogs/
 *.local.json
+start-yomi.ps1
 
 # Frontend dependencies and local build output
 node_modules/

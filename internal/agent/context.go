@@ -126,6 +126,7 @@ func (m *ContextManager) BuildForUser(ctx context.Context, userID, sessionID, sy
 	if !baseBudget.Exceeded {
 		return newContextResult(base, len(history), baseBudget.MessageTokens, &baseBudget, memories, memoryIDs, memoryTokens, memoryErr, memoryProfileCount, memoryEpisodeCount, memoryStats), nil
 	}
+	// 压缩之后还是超出预算，需要继续压缩
 	recent := m.RecentMessages
 	if recent <= 0 {
 		recent = 8
@@ -152,6 +153,7 @@ func (m *ContextManager) BuildForUser(ctx context.Context, userID, sessionID, sy
 		summaryCtx, cancel = context.WithTimeout(ctx, m.SummaryTimeout)
 		defer cancel()
 	}
+	// 将旧的summary + history[covered:cut] 提交给模型进行新的摘要
 	newSummary, err := summarizeMessages(summaryCtx, m.Provider, m.Model, summary, history[covered:cut])
 	if err != nil {
 		return ContextResult{}, err
