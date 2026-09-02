@@ -191,6 +191,32 @@ func main() {
 	if reranker != nil && hybridSearchReason != "fts_bm25_plus_qdrant_rrf" {
 		fmt.Fprintf(os.Stderr, "warning: reranker configured but inactive because hybrid retrieval is disabled (reason=%s)\n", hybridSearchReason)
 	}
+	resetRuntimeData := func(resetCtx context.Context) error {
+		if resetter, ok := memoryIndexer.(memory.Resetter); ok {
+			if err := resetter.Reset(resetCtx); err != nil {
+				return err
+			}
+		}
+		if err := memoryStore.ClearAll(resetCtx); err != nil {
+			return err
+		}
+		if err := store.ClearAll(); err != nil {
+			return err
+		}
+		for _, name := range []string{"archives", "traces", "runs", "artifacts"} {
+			path := filepath.Join(rootDir, name)
+			if err := os.RemoveAll(path); err != nil {
+				return fmt.Errorf("clear %s: %w", name, err)
+			}
+			if err := os.MkdirAll(path, 0o700); err != nil {
+				return fmt.Errorf("recreate %s: %w", name, err)
+			}
+		}
+		if err := os.Remove(filepath.Join(rootDir, ".DS_Store")); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("clear session root metadata: %w", err)
+		}
+		return nil
+	}
 	qdrantIndexReason := "qdrant_disabled"
 	if qdrantEnabled {
 		switch {
@@ -296,6 +322,7 @@ func main() {
 		addr := envOr("SZABOT_WEB_ADDR", ":8080")
 		web := &channels.WebChannel{
 			ID:        "web",
+			UserID:    envOr("SZABOT_USER_ID", "local"),
 			Bus:       b,
 			Trace:     traceSink,
 			Snapshots: runSnapshots,
@@ -306,6 +333,7 @@ func main() {
 			OnCancel:    loop.CancelSession,
 			Config:      buildConfigView(provider.Name(), model, workspace, rootDir, contextMaxTokens, contextRecentMessages, toolResultMaxTokens, outputReserveTokens, runTimeout, memoryExtractor != nil, qdrantEnabled, qdrantURL, qdrantCollection, qdrantAutoStartEnabled(qdrantURL), memoryIndexer != nil && memoryEmbedder != nil, embeddingBaseURL, embeddingModel, memoryConfigKeyPresent(embeddingAPIKey), rerankerEnabled, reranker != nil, rerankerBaseURL, rerankerModel, memoryConfigKeyPresent(rerankerAPIKey)),
 			ConfigStore: settings,
+			DebugReset:  resetRuntimeData,
 		}
 		if err := web.Start(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "error: start web channel: %v\n", err)

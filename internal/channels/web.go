@@ -35,6 +35,11 @@ type WebChannel struct {
 	// ID 就是 ChannelID，出站消息靠它区分归属。默认 "web"。
 	ID string
 
+	// UserID 是长期记忆的统一用户作用域。它与 SessionID 分离：一个用户
+	// 可以创建多个 Web 会话，但这些会话共享同一组长期记忆。
+	UserID string
+	userMu sync.RWMutex
+
 	// Bus 是消息总线引用。
 	Bus *bus.MessageBus
 
@@ -47,6 +52,9 @@ type WebChannel struct {
 	// Config is the sanitized startup configuration shown in the Web settings view.
 	Config      ConfigView
 	ConfigStore ConfigStore
+	// DebugReset clears all local runtime data when explicitly requested by the
+	// user through the debug endpoint.
+	DebugReset func(context.Context) error
 
 	// Addr 是 HTTP 监听地址，如 ":8080"。默认 ":8080"。
 	Addr string
@@ -116,6 +124,8 @@ func (w *WebChannel) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/sessions", w.handleSessions)
 	mux.HandleFunc("/api/session/messages", w.handleSessionMessages)
 	mux.HandleFunc("/api/config", w.handleConfig)
+	mux.HandleFunc("/api/identity", w.handleIdentity)
+	mux.HandleFunc("/api/debug/reset", w.handleDebugReset)
 
 	server := &http.Server{Addr: w.Addr, Handler: mux}
 
@@ -344,12 +354,81 @@ func (w *WebChannel) handleSessions(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "session store unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	sessions, err := w.Sessions.ListSessions()
+	userID := w.userID()
+	var sessions []agent.SessionInfo
+	var err error
+	if scoped, ok := interface{}(w.Sessions).(interface {
+		ListSessionsForUser(string) ([]agent.SessionInfo, error)
+	}); ok {
+		sessions, err = scoped.ListSessionsForUser(userID)
+	} else {
+		sessions, err = w.Sessions.ListSessions()
+	}
 	if err != nil {
 		http.Error(rw, "list sessions failed", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(rw, map[string]any{"sessions": sessions})
+	writeJSON(rw, map[string]any{"user_id": userID, "sessions": sessions})
+}
+
+func (w *WebChannel) handleIdentity(rw http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPut {
+		var request struct {
+			UserID string `json:"user_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(rw, "invalid user id", http.StatusBadRequest)
+			return
+		}
+		if err := w.setUserID(request.UserID); err != nil {
+			http.Error(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(rw, map[string]string{"user_id": w.userID()})
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(rw, map[string]string{"user_id": w.userID()})
+}
+
+func (w *WebChannel) handleDebugReset(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if w.DebugReset == nil {
+		http.Error(rw, "debug reset unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := w.DebugReset(r.Context()); err != nil {
+		http.Error(rw, "reset failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(rw, map[string]any{"reset": true, "user_id": w.userID()})
+}
+
+func (w *WebChannel) userID() string {
+	w.userMu.RLock()
+	defer w.userMu.RUnlock()
+	userID := strings.TrimSpace(w.UserID)
+	if userID == "" {
+		return "local"
+	}
+	return userID
+}
+
+func (w *WebChannel) setUserID(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("user id is required")
+	}
+	w.userMu.Lock()
+	w.UserID = value
+	w.userMu.Unlock()
+	return nil
 }
 
 type sessionActivityView struct {
@@ -390,9 +469,18 @@ func (w *WebChannel) handleSessionMessages(rw http.ResponseWriter, r *http.Reque
 		http.Error(rw, "missing session", http.StatusBadRequest)
 		return
 	}
-	history, err := w.Sessions.Load(sessionID)
+	userID := w.userID()
+	var history []providers.Message
+	var err error
+	if scoped, ok := interface{}(w.Sessions).(interface {
+		LoadForUser(string, string) ([]providers.Message, error)
+	}); ok {
+		history, err = scoped.LoadForUser(userID, sessionID)
+	} else {
+		history, err = w.Sessions.Load(sessionID)
+	}
 	if err != nil {
-		http.Error(rw, "load session failed", http.StatusInternalServerError)
+		http.Error(rw, "session unavailable", http.StatusNotFound)
 		return
 	}
 	turns := []sessionTurnView{}
@@ -544,6 +632,10 @@ func (w *WebChannel) handleTraces(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "missing session", http.StatusBadRequest)
 		return
 	}
+	if !w.sessionAllowed(sessionID) {
+		http.Error(rw, "session unavailable", http.StatusNotFound)
+		return
+	}
 	if w.Trace == nil {
 		http.Error(rw, "trace reader unavailable", http.StatusServiceUnavailable)
 		return
@@ -568,6 +660,10 @@ func (w *WebChannel) handleRuns(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.URL.Query().Get("session")
+	if sessionID != "" && !w.sessionAllowed(sessionID) {
+		http.Error(rw, "session unavailable", http.StatusNotFound)
+		return
+	}
 	statusFilter := r.URL.Query().Get("status")
 	snapshots, err := w.Snapshots.List(sessionID)
 	if err != nil {
@@ -597,6 +693,10 @@ func (w *WebChannel) handleTraceRun(rw http.ResponseWriter, r *http.Request) {
 	}
 	if w.Snapshots != nil {
 		if snapshot, err := w.Snapshots.Load(runID); err == nil {
+			if !w.sessionAllowed(snapshot.SessionID) {
+				http.Error(rw, "run unavailable", http.StatusNotFound)
+				return
+			}
 			writeJSON(rw, w.summaryFromSnapshot(snapshot, true))
 			return
 		}
@@ -608,12 +708,25 @@ func (w *WebChannel) handleTraceRun(rw http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(events) > 0 {
+			if !w.sessionAllowed(events[0].SessionID) {
+				http.Error(rw, "run unavailable", http.StatusNotFound)
+				return
+			}
 			runs := groupTraceRuns(events, true)
 			writeJSON(rw, runs[0])
 			return
 		}
 	}
 	http.NotFound(rw, r)
+}
+
+func (w *WebChannel) sessionAllowed(sessionID string) bool {
+	if w.Sessions == nil {
+		return true
+	}
+	userID := w.userID()
+	_, err := w.Sessions.LoadForUser(userID, strings.TrimSpace(sessionID))
+	return err == nil
 }
 
 func (w *WebChannel) summaryFromSnapshot(snapshot agent.RunSnapshot, includeEvents bool) runSummaryView {
@@ -802,9 +915,18 @@ func (w *WebChannel) handleSend(ctx context.Context) http.HandlerFunc {
 		in := bus.InboundMessage{
 			ChannelID: w.ID,
 			SessionID: session,
-			UserID:    session, // Web 场景没有独立用户体系，用 session 兜底。
+			UserID:    w.userID(),
 			Text:      req.Text,
 			Time:      time.Now(),
+		}
+		if in.UserID == "" {
+			in.UserID = "local"
+		}
+		if w.Sessions != nil {
+			if err := w.Sessions.SetSessionUser(session, in.UserID); err != nil {
+				http.Error(rw, "session belongs to another user", http.StatusForbidden)
+				return
+			}
 		}
 		if err := w.Bus.PublishInbound(ctx, in); err != nil {
 			http.Error(rw, "publish failed", http.StatusServiceUnavailable)

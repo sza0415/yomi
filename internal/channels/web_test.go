@@ -55,11 +55,74 @@ func TestHandleSendPublishesInbound(t *testing.T) {
 		if in.SessionID != "web:abc" {
 			t.Errorf("SessionID = %q, want web:abc", in.SessionID)
 		}
+		if in.UserID != "local" {
+			t.Errorf("UserID = %q, want local", in.UserID)
+		}
 		if in.Text != "你好" {
 			t.Errorf("Text = %q, want 你好", in.Text)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for inbound message")
+	}
+}
+
+func TestHandleSendUsesConfiguredUserAcrossSessions(t *testing.T) {
+	b := bus.New(16)
+	w := newTestWeb(b)
+	w.UserID = "my-user"
+	ctx := context.Background()
+
+	for _, session := range []string{"web:first", "web:second"} {
+		body, _ := json.Marshal(sendRequest{Session: session, Text: "记住我的家乡"})
+		req := httptest.NewRequest(http.MethodPost, "/api/send", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		w.handleSend(ctx)(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("session %s status = %d; body=%s", session, rec.Code, rec.Body.String())
+		}
+		select {
+		case in := <-b.Inbound():
+			if in.SessionID != session {
+				t.Errorf("SessionID = %q, want %q", in.SessionID, session)
+			}
+			if in.UserID != "my-user" {
+				t.Errorf("UserID = %q, want my-user", in.UserID)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timeout waiting for inbound message for %s", session)
+		}
+	}
+}
+
+func TestIdentityReturnsConfiguredUser(t *testing.T) {
+	w := newTestWeb(bus.New(16))
+	w.UserID = "my-user"
+	rec := httptest.NewRecorder()
+	w.handleIdentity(rec, httptest.NewRequest(http.MethodGet, "/api/identity", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"user_id":"my-user"`) {
+		t.Fatalf("identity response = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestIdentityCanBeChangedAtRuntime(t *testing.T) {
+	w := newTestWeb(bus.New(16))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/identity", strings.NewReader(`{"user_id":"alice"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w.handleIdentity(rec, req)
+	if rec.Code != http.StatusOK || w.userID() != "alice" {
+		t.Fatalf("identity update = %d %s, user=%q", rec.Code, rec.Body.String(), w.userID())
+	}
+}
+
+func TestDebugResetInvokesCallback(t *testing.T) {
+	w := newTestWeb(bus.New(16))
+	called := false
+	w.DebugReset = func(context.Context) error { called = true; return nil }
+	rec := httptest.NewRecorder()
+	w.handleDebugReset(rec, httptest.NewRequest(http.MethodPost, "/api/debug/reset", nil))
+	if rec.Code != http.StatusOK || !called || !strings.Contains(rec.Body.String(), `"reset":true`) {
+		t.Fatalf("reset response = %d %s called=%v", rec.Code, rec.Body.String(), called)
 	}
 }
 

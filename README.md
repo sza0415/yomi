@@ -463,9 +463,20 @@ export SZABOT_QDRANT_AUTO_START=off
 `<user_memory>` 参考资料块注入模型上下文。记忆检索失败不会阻塞主对话；删除会保留历史
 事件，但被删除记录不会再次进入默认检索结果。
 
-`UserID` 是长期记忆的隔离键，`SessionID` 只是会话路由键。CLI 当前使用固定的
-`UserID=local`；Web 在尚未接入独立账户体系前使用 Session 作为用户标识，因此不同 Web
-Session 默认不会共享记忆。
+`UserID` 是长期记忆的隔离键，`SessionID` 只是会话路由键。CLI 使用固定的
+`UserID=local`；Web 使用 `SZABOT_USER_ID` 配置的统一用户标识（默认也是 `local`），
+因此同一用户的不同 Web Session 会共享记忆。Web 页面顶栏可以直接切换当前用户；也可以在
+启动前设置默认用户，例如：
+
+```bash
+export SZABOT_USER_ID=my-user
+```
+
+Web 页面顶部会显示当前 `UserID`。会话首次发送消息时会记录用户归属；切换到新的
+`UserID` 后，旧用户的会话列表、历史和 Trace 都不可见，从而与长期记忆一起隔离。
+
+配置页还提供“清空调试数据”操作。确认后会删除当前 `sessionlogs` 下的会话、Trace、Run、
+Archive、Artifact，以及 SQLite 记忆和 Qdrant 向量；这是不可逆操作。
 
 当前已支持 Run 完成后的异步候选提取、敏感信息策略过滤、重复候选去重、SQLite 写入、
 Embedding 生成、SQLite FTS5/BM25 + Qdrant 的混合召回和 HTTP Reranker 适配。用户侧

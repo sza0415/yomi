@@ -30,6 +30,8 @@ const encodedSessionNamePrefix = "yomi-session-b64-"
 type SessionStore struct {
 	dir        string
 	archiveDir string
+	usersPath  string
+	users      map[string]string
 
 	mu    sync.Mutex
 	cache map[string][]providers.Message
@@ -90,11 +92,21 @@ func NewSessionStore(dir string) (*SessionStore, error) {
 	if err := os.Chmod(archiveDir, 0o700); err != nil {
 		return nil, fmt.Errorf("agent: secure archive dir %q: %w", archiveDir, err)
 	}
-	return &SessionStore{
+	store := &SessionStore{
 		dir:        dir,
 		archiveDir: archiveDir,
+		usersPath:  filepath.Join(dir, ".session-users.json"),
 		cache:      make(map[string][]providers.Message),
-	}, nil
+		users:      make(map[string]string),
+	}
+	if data, err := os.ReadFile(store.usersPath); err == nil {
+		if err := json.Unmarshal(data, &store.users); err != nil {
+			return nil, fmt.Errorf("agent: parse session users: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("agent: read session users: %w", err)
+	}
+	return store, nil
 }
 
 // Load 返回某个 session 的完整历史（不含 system prompt）。
@@ -160,6 +172,126 @@ func (s *SessionStore) ListSessions() ([]SessionInfo, error) {
 		return result[i].UpdatedAt.After(result[j].UpdatedAt)
 	})
 	return result, nil
+}
+
+// SetSessionUser associates a session with a user. An existing association
+// cannot be changed implicitly, which prevents one user from taking over
+// another user's conversation by guessing its session ID.
+func (s *SessionStore) SetSessionUser(sessionID, userID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	userID = strings.TrimSpace(userID)
+	if sessionID == "" || userID == "" {
+		return fmt.Errorf("agent: session and user are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if owner := strings.TrimSpace(s.users[sessionID]); owner != "" && owner != userID {
+		return fmt.Errorf("agent: session belongs to another user")
+	}
+	if s.users[sessionID] == userID {
+		return nil
+	}
+	s.users[sessionID] = userID
+	return s.saveSessionUsersLocked()
+}
+
+// ClearAll removes every persisted conversation and ownership mapping while
+// keeping the store usable in the current process.
+func (s *SessionStore) ClearAll() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.dir)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("agent: list sessions for clear: %w", err)
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(s.dir, entry.Name())); err != nil {
+			return fmt.Errorf("agent: clear session data: %w", err)
+		}
+	}
+	s.cache = make(map[string][]providers.Message)
+	s.users = make(map[string]string)
+	return nil
+}
+
+// ListSessionsForUser returns only conversations owned by userID. Legacy
+// sessions created before ownership tracking are treated as local-user data.
+func (s *SessionStore) ListSessionsForUser(userID string) ([]SessionInfo, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return []SessionInfo{}, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listSessionsLocked(func(sessionID string) bool {
+		owner := strings.TrimSpace(s.users[sessionID])
+		return owner == userID || (owner == "" && userID == "local")
+	})
+}
+
+// LoadForUser loads a conversation only when it belongs to userID. Legacy
+// sessions remain readable under the default local scope for compatibility.
+func (s *SessionStore) LoadForUser(userID, sessionID string) ([]providers.Message, error) {
+	userID = strings.TrimSpace(userID)
+	sessionID = strings.TrimSpace(sessionID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	owner := strings.TrimSpace(s.users[sessionID])
+	if owner != "" && owner != userID || owner == "" && userID != "local" {
+		return nil, fmt.Errorf("agent: session does not belong to user")
+	}
+	if history, ok := s.cache[sessionID]; ok {
+		return cloneMessages(history), nil
+	}
+	history, err := s.readFile(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	s.cache[sessionID] = history
+	return cloneMessages(history), nil
+}
+
+func (s *SessionStore) listSessionsLocked(include func(string) bool) ([]SessionInfo, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, fmt.Errorf("agent: list sessions: %w", err)
+	}
+	result := make([]SessionInfo, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		sessionID := decodeSessionName(strings.TrimSuffix(entry.Name(), ".jsonl"))
+		if sessionID == "" || !include(sessionID) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, fmt.Errorf("agent: stat session %q: %w", sessionID, err)
+		}
+		history, err := s.readFile(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, SessionInfo{ID: sessionID, Title: sessionTitle(history, sessionID), Preview: sessionPreview(history), MessageCount: len(history), CreatedAt: info.ModTime(), UpdatedAt: info.ModTime()})
+	}
+	sort.SliceStable(result, func(i, j int) bool { return result[i].UpdatedAt.After(result[j].UpdatedAt) })
+	return result, nil
+}
+
+func (s *SessionStore) saveSessionUsersLocked() error {
+	data, err := json.MarshalIndent(s.users, "", "  ")
+	if err != nil {
+		return fmt.Errorf("agent: marshal session users: %w", err)
+	}
+	tmp := s.usersPath + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+		return fmt.Errorf("agent: write session users: %w", err)
+	}
+	if err := os.Rename(tmp, s.usersPath); err != nil {
+		return fmt.Errorf("agent: replace session users: %w", err)
+	}
+	return nil
 }
 
 func sessionTitle(history []providers.Message, fallback string) string {

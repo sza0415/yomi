@@ -78,6 +78,31 @@ func TestSessionStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSessionStoreUserOwnershipIsolation(t *testing.T) {
+	store, err := NewSessionStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetSessionUser("alice-session", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Append("alice-session", providers.Message{Role: providers.RoleUser, Content: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadForUser("bob", "alice-session"); err == nil {
+		t.Fatal("LoadForUser unexpectedly allowed another user")
+	}
+	if sessions, err := store.ListSessionsForUser("bob"); err != nil || len(sessions) != 0 {
+		t.Fatalf("ListSessionsForUser(bob) = %#v, %v; want empty", sessions, err)
+	}
+	if sessions, err := store.ListSessionsForUser("alice"); err != nil || len(sessions) != 1 {
+		t.Fatalf("ListSessionsForUser(alice) = %#v, %v; want one session", sessions, err)
+	}
+	if err := store.SetSessionUser("alice-session", "bob"); err == nil {
+		t.Fatal("SetSessionUser unexpectedly reassigned an owned session")
+	}
+}
+
 func TestSessionStoreWindowsUnsafeIDRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewSessionStore(dir)

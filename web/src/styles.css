@@ -62,6 +62,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   display: inline-flex; align-items: center; justify-content: center; gap: 8px; border-radius: 10px;
   border: 1px solid transparent; cursor: pointer; font-weight: 600; transition: 140ms ease;
 }
+.danger-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; padding: 0 13px; border: 1px solid rgba(255, 107, 107, .45); border-radius: 10px; color: var(--danger); background: rgba(255, 107, 107, .08); cursor: pointer; font-weight: 600; }
+.danger-button:hover { background: rgba(255, 107, 107, .15); }
 .new-chat-button { width: 100%; min-height: 42px; background: var(--accent); color: var(--accent-ink); }
 .new-chat-button:hover { background: #e5ff7e; transform: translateY(-1px); }
 button:disabled { opacity: .42; cursor: not-allowed; transform: none !important; }
@@ -99,6 +101,10 @@ button:disabled { opacity: .42; cursor: not-allowed; transform: none !important;
 .brand-copy { display: grid; gap: 0; }
 .brand-copy strong { font: 700 16px/1.1 "Segoe UI Variable", "Segoe UI", sans-serif; letter-spacing: -.02em; }
 .brand-copy span { color: var(--subtle); font-size: 10px; }
+.user-identity { display: flex; align-items: center; gap: 5px; max-width: 210px; padding-left: 10px; border-left: 1px solid var(--border); color: var(--muted); }
+.user-identity input { width: 110px; min-width: 0; border: 0; outline: 0; color: var(--text); background: transparent; font: inherit; }
+.user-identity button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid var(--border); border-radius: 6px; color: var(--accent); background: var(--surface-soft); cursor: pointer; }
+.user-identity button:disabled { opacity: .4; cursor: default; }
 .sidebar-trigger { display: none; }
 .view-tabs { display: flex; align-items: center; gap: 3px; padding: 4px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 11px; }
 .view-tabs button {
@@ -287,7 +293,7 @@ select:focus, .config-input-wrap input:focus { border-color: var(--border-strong
 }
 
 @media (max-width: 760px) {
-  .topbar { grid-template-columns: 1fr auto; padding: 0 12px; }.brand-copy span, .connection-state span { display: none; }
+  .topbar { grid-template-columns: 1fr auto; padding: 0 12px; }.brand-copy span, .connection-state span { display: none; }.user-identity { max-width: 150px; padding-left: 6px; }.user-identity input { width: 75px; }
   .view-tabs { position: fixed; z-index: 22; bottom: 9px; left: 50%; transform: translateX(-50%); box-shadow: var(--shadow); }
   .connection-state { grid-column: 2; grid-row: 1; }
   .message-list { width: calc(100% - 24px); padding-top: 26px; }.message-row.message-user { padding-left: 7%; }
