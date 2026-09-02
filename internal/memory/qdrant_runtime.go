@@ -18,19 +18,17 @@ const (
 	defaultQdrantVolume    = "yomi-qdrant-data"
 )
 
-// EnsureLocalQdrant starts or reuses the development Qdrant container when
-// endpoint points at localhost. It preserves the historical behavior of not
-// stopping the container; callers that own the process lifecycle should use
-// EnsureLocalQdrantManaged instead.
+// EnsureLocalQdrant 在 endpoint 指向本机时启动或复用开发用的 Qdrant 容器。
+// 为保持原有行为，该函数不会停止容器；需要管理进程生命周期的调用方应改用
+// EnsureLocalQdrantManaged。
 func EnsureLocalQdrant(ctx context.Context, endpoint string) error {
 	_, err := EnsureLocalQdrantManaged(ctx, endpoint)
 	return err
 }
 
-// EnsureLocalQdrantManaged starts or reuses the development Qdrant container
-// and returns a cleanup function. The cleanup function stops the container
-// only when this call started an existing stopped container or created a new
-// one. A container that was already running is left to its external owner.
+// EnsureLocalQdrantManaged 启动或复用开发用的 Qdrant 容器，并返回清理函数。
+// 只有当本次调用启动了一个原本停止的容器，或者新建了容器时，清理函数才会
+// 停止它；对于调用前已经运行的容器，仍交由其外部所有者管理。
 func EnsureLocalQdrantManaged(ctx context.Context, endpoint string) (func(context.Context) error, error) {
 	u, err := url.Parse(strings.TrimSpace(endpoint))
 	if err != nil || u.Hostname() == "" {

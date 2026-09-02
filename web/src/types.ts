@@ -44,6 +44,7 @@ export interface AgentActivity {
 
 export interface ChatMessage {
   id: string;
+  runId?: string;
   role: "user" | "assistant" | "question" | "notice";
   content: string;
   activities: AgentActivity[];

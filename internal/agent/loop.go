@@ -543,9 +543,9 @@ func (l *Loop) handleRun(ctx context.Context, in bus.InboundMessage, run *Run) {
 		log.Printf("[loop] run=%s completion transition failed: %v", run.ID, err)
 		return
 	}
+	// 异步执行长期记忆保存
 	l.startMemoryExtraction(ctx, run, in, result.Answer)
 	l.record(ctx, run, tracing.EventRunFinished, string(RunCompleted), map[string]any{"usage": result.Usage, "answer": result.Answer, "memory": run.Snapshot().Memory})
-
 	l.publishRunDone(ctx, in, run)
 }
 

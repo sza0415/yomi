@@ -71,16 +71,15 @@ func (l *Loop) extractAndStoreMemory(ctx context.Context, run *Run, in bus.Inbou
 		if relatedStore, ok := l.Memory.(memory.RelatedStore); ok && strings.TrimSpace(candidate.Attribute) != "" {
 			existing, searchErr = relatedStore.FindRelated(ctx, in.UserID, candidate.Kind, candidate.Subject, candidate.Attribute)
 		} else {
-			// Legacy candidates without an attribute key retain the old text
-			// lookup path and are only deduplicated by normalized content.
+			// 对于没有属性键的旧版候选记忆，继续使用原有的文本检索路径，
+			// 并且只根据规范化后的内容进行去重。
 			existing, searchErr = l.Memory.Search(ctx, memory.Query{UserID: in.UserID, Text: candidate.Content, Limit: 8})
 		}
-		resolution := memory.ResolveCandidate(existing, candidate)
+		resolution := mem4/7ory.ResolveCandidate(existing, candidate)
 		mutationStore, canMutate := l.Memory.(memory.MutationStore)
 		if !canMutate && resolution.Action != memory.ResolutionDuplicate && resolution.Action != memory.ResolutionCoexist {
-			// A custom legacy Store cannot atomically transition related rows;
-			// preserve its previous append-only behavior rather than pretending
-			// that a conflict was resolved.
+			// 自定义的旧版 Store 无法以原子方式转换关联记录的状态；
+			// 此时保留原有的仅追加行为，不能假设冲突已经得到解决。
 			resolution = memory.Resolution{Action: memory.ResolutionCoexist, Reason: "store does not support atomic memory mutations"}
 		}
 		if searchErr == nil && resolution.Action == memory.ResolutionDuplicate {
@@ -194,8 +193,8 @@ func (l *Loop) markMemoryIndexState(ctx context.Context, items []memory.Memory, 
 	}
 	for _, item := range items {
 		if err := store.MarkIndexed(ctx, item.UserID, item.ID, status, model, version, dimension); err != nil {
-			// Index status is operational metadata; an update failure must not
-			// turn a successful vector write into a failed user Run.
+			// 索引状态只是运行元数据；即使状态更新失败，也不能把一次
+			// 已经成功的向量写入判定为用户 Run 失败。
 			continue
 		}
 	}

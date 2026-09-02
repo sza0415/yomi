@@ -9,9 +9,8 @@ import (
 
 const defaultRRFK = 60
 
-// HybridStore keeps SQLite as the canonical store while optionally adding a
-// semantic candidate list from Qdrant. Vector hits are always hydrated through
-// the canonical store before they can be returned to callers.
+// HybridStore 以 SQLite 作为权威存储，同时可以选择加入来自 Qdrant 的语义候选列表。
+// 向量命中项必须先通过权威存储补全并校验，之后才能返回给调用方。
 type HybridStore struct {
 	Canonical Store
 	Embedder  EmbeddingProvider

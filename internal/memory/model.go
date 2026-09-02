@@ -25,8 +25,7 @@ const (
 	ChangeHintUnknown = "unknown"
 )
 
-// Memory is the canonical user-scoped record. Search indexes are derived from
-// this record and must not be treated as the source of truth.
+// Memory 是按用户隔离的权威记录。搜索索引由该记录派生，不能被当作事实来源。
 type Memory struct {
 	ID               string    `json:"id"`
 	UserID           string    `json:"user_id"`
@@ -57,8 +56,8 @@ type Query struct {
 	Text             string
 	Limit            int
 	IncludeConflicts bool
-	// Kinds optionally restricts retrieval to a set of memory kinds. An empty
-	// list preserves the historical all-kinds behavior.
+	// Kinds 可以把检索范围限制在指定的记忆类型集合中。
+	// 空列表保持原有行为，即检索所有类型。
 	Kinds []string
 }
 
@@ -72,9 +71,8 @@ type Event struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// Mutation applies one candidate and any related state transitions as a
-// single source-of-truth transaction. Derived vector indexes are updated only
-// after this transaction commits.
+// Mutation 把一个候选记忆及其关联状态转换作为一笔权威事务统一应用。
+// 只有该事务提交后，才会更新派生的向量索引。
 type Mutation struct {
 	Memory       Memory
 	SupersedeIDs []string
@@ -91,20 +89,19 @@ type Store interface {
 	Rebuild(ctx context.Context, userID string) error
 }
 
-// IndexStateStore is an optional extension implemented by stores that persist
-// the status of a derived embedding index without changing memory content.
+// IndexStateStore 是可选扩展，由需要持久化派生嵌入索引状态的存储实现，
+// 更新索引状态时不会修改记忆正文。
 type IndexStateStore interface {
 	MarkIndexed(ctx context.Context, userID, memoryID, status, model, version string, dimension int) error
 }
 
-// RelatedStore is an optional extension used by the conflict resolver to find
-// memories that occupy the same structured subject/attribute slot.
+// RelatedStore 是供冲突解析器使用的可选扩展，用于查找占用同一结构化
+// 主体/属性位置的记忆。
 type RelatedStore interface {
 	FindRelated(ctx context.Context, userID, kind, subject, attribute string) ([]Memory, error)
 }
 
-// MutationStore is an optional extension that can apply a candidate and its
-// related state transitions atomically.
+// MutationStore 是可选扩展，可以原子地应用候选记忆及其关联状态转换。
 type MutationStore interface {
 	ApplyMutation(ctx context.Context, mutation Mutation) error
 }
@@ -126,8 +123,8 @@ type SearchResult struct {
 	Stats    SearchStats
 }
 
-// DetailedStore is an optional read extension used for layered retrieval and
-// fine-grained observability. Store.Search remains the compatibility API.
+// DetailedStore 是用于分层检索和细粒度可观测性的可选只读扩展。
+// Store.Search 仍作为兼容接口保留。
 type DetailedStore interface {
 	SearchDetailed(ctx context.Context, query Query) (SearchResult, error)
 }

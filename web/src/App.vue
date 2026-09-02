@@ -35,6 +35,7 @@ const waiting = ref(false);
 const answering = ref(false);
 const activeRun = ref(false);
 const online = ref(false);
+const historyLoading = ref(!configOnly);
 const statusText = ref(configOnly ? "配置向导" : "连接中");
 const sidebarOpen = ref(window.innerWidth >= 1080);
 const messagesViewport = ref<HTMLElement | null>(null);
@@ -42,7 +43,10 @@ const composerInput = ref<HTMLTextAreaElement | null>(null);
 
 let eventSource: EventSource | null = null;
 let currentAssistantID = "";
+let currentRunID = "";
 let animationFrame = 0;
+let recoveryTimer = 0;
+let recoveryInFlight = false;
 let pendingApprovalTarget: { messageID: string; activityID: string } | null = null;
 
 const textMessageMap = new Map<string, string>();
@@ -52,8 +56,17 @@ const pendingText = new Map<string, string>();
 const pendingReasoning = new Map<string, string>();
 
 const busy = computed(() => waiting.value || activeRun.value || answering.value);
-const canSend = computed(() => Boolean(input.value.trim()) && !waiting.value);
-const composerPlaceholder = computed(() => answering.value ? "输入你的回答，或选择上方选项…" : "给 Yomi 发送消息…");
+const canSend = computed(() =>
+  Boolean(input.value.trim()) &&
+  !waiting.value &&
+  (answering.value || (online.value && !historyLoading.value)),
+);
+const composerPlaceholder = computed(() => {
+  if (answering.value) return "输入你的回答，或选择上方选项…";
+  if (historyLoading.value) return "正在恢复会话状态…";
+  if (!online.value) return "正在连接 Yomi 后端…";
+  return "给 Yomi 发送消息…";
+});
 
 function newSessionID(): string {
   return `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -87,9 +100,13 @@ function scrollToBottom(): void {
 
 function ensureAssistant(): ChatMessageType {
   const existing = currentAssistantID ? messageByID(currentAssistantID) : undefined;
-  if (existing) return existing;
+  if (existing) {
+    if (!existing.runId && currentRunID) existing.runId = currentRunID;
+    return existing;
+  }
   const message: ChatMessageType = {
     id: newLocalID("assistant"),
+    runId: currentRunID || undefined,
     role: "assistant",
     content: "",
     activities: [],
@@ -166,11 +183,12 @@ function historyToMessages(history: HistoryMessage[], turns: HistoryTurn[] = [])
     return turns.flatMap((turn) => {
       const items: ChatMessageType[] = [];
       if (turn.user) {
-        items.push({ id: `${turn.runId}-user`, role: "user", content: turn.user, activities: [] });
+        items.push({ id: `${turn.runId}-user`, runId: turn.runId, role: "user", content: turn.user, activities: [] });
       }
       if (turn.assistant || turn.activities.length) {
         items.push({
           id: `${turn.runId}-assistant`,
+          runId: turn.runId,
           role: "assistant",
           content: turn.assistant ?? "",
           activities: turn.activities.map((activity) => ({ ...activity })),
@@ -224,6 +242,10 @@ function applyHistory(history: ConversationHistory): void {
   messages.value = historyToMessages(history.messages, history.turns);
   pendingApprovalTarget = null;
   answering.value = false;
+  activeRun.value = false;
+  waiting.value = false;
+  currentAssistantID = "";
+  currentRunID = "";
   toolCallMap.clear();
 
   for (let index = messages.value.length - 1; index >= 0; index--) {
@@ -236,11 +258,136 @@ function applyHistory(history: ConversationHistory): void {
     const activity = [...message.activities].reverse().find((item) => item.kind === "approval" && item.status === "waiting");
     if (!activity) continue;
     currentAssistantID = message.id;
+    currentRunID = activity.runId || message.runId || "";
     pendingApprovalTarget = { messageID: message.id, activityID: activity.id };
     answering.value = true;
     activeRun.value = true;
     waiting.value = false;
     break;
+  }
+}
+
+const terminalRunStatuses = new Set(["completed", "failed", "cancelled", "timed_out", "budget_exceeded"]);
+
+function sameActivity(left: AgentActivity, right: AgentActivity): boolean {
+  if (left.id && right.id && left.id === right.id) return true;
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "approval") {
+    return Boolean(left.runId && right.runId && left.runId === right.runId) || left.content === right.content;
+  }
+  if (left.kind === "tool") return left.title === right.title && left.content === right.content;
+  return left.status === "running" || left.content === right.content ||
+    right.content.startsWith(left.content) || left.content.startsWith(right.content);
+}
+
+function mergeActivity(target: ChatMessageType, incoming: AgentActivity): void {
+  const existing = target.activities.find((activity) => sameActivity(activity, incoming));
+  if (!existing) {
+    target.activities.push({ ...incoming });
+    return;
+  }
+  existing.title = incoming.title || existing.title;
+  if (incoming.content && incoming.content.length >= existing.content.length) existing.content = incoming.content;
+  if (incoming.result !== undefined) existing.result = incoming.result;
+  if (incoming.answer !== undefined) existing.answer = incoming.answer;
+  if (incoming.options?.length) existing.options = [...incoming.options];
+  if (incoming.runId) existing.runId = incoming.runId;
+  existing.status = incoming.status;
+}
+
+function restorePendingApproval(): void {
+  for (let index = messages.value.length - 1; index >= 0; index--) {
+    const message = messages.value[index];
+    const activity = [...message.activities].reverse().find((item) => item.kind === "approval" && item.status === "waiting");
+    if (!activity) continue;
+    currentAssistantID = message.id;
+    currentRunID = activity.runId || message.runId || currentRunID;
+    message.streaming = true;
+    pendingApprovalTarget = { messageID: message.id, activityID: activity.id };
+    answering.value = true;
+    waiting.value = false;
+    activeRun.value = true;
+    return;
+  }
+}
+
+// SSE 在调试断点期间可能断开。Trace/History 是可恢复的事实源：重连后把
+// 断线窗口里的思考、工具结果、审批问题和 Run 终态合并回当前对话。
+function reconcileHistory(history: ConversationHistory): void {
+  flushPendingDeltas();
+  const recovered = historyToMessages(history.messages, history.turns);
+
+  for (const incoming of recovered) {
+    if (!incoming.runId) continue;
+    let target = messages.value.find((message) => message.runId === incoming.runId && message.role === incoming.role);
+
+    if (!target && incoming.role === "user") {
+      target = [...messages.value].reverse().find((message) =>
+        message.role === "user" && !message.runId && message.content === incoming.content,
+      );
+      if (target) target.runId = incoming.runId;
+      continue;
+    }
+
+    if (!target && incoming.role === "assistant") {
+      const current = currentAssistantID ? messageByID(currentAssistantID) : undefined;
+      if (current?.role === "assistant" && !current.runId) {
+        current.runId = incoming.runId;
+        target = current;
+      }
+    }
+
+    if (!target) {
+      // 用户消息在 submit 时已立即加入；只恢复缺失的 assistant 轨迹，避免重复。
+      if (incoming.role === "assistant") messages.value.push({ ...incoming, activities: incoming.activities.map((item) => ({ ...item })) });
+      continue;
+    }
+
+    if (incoming.role === "assistant") {
+      for (const activity of incoming.activities) mergeActivity(target, activity);
+      if (incoming.content && incoming.content.length >= target.content.length) target.content = incoming.content;
+      target.streaming = incoming.streaming;
+      for (const activity of target.activities) {
+        if (activity.kind === "tool" && activity.id) {
+          toolCallMap.set(activity.id, { messageID: target.id, activityID: activity.id });
+        }
+      }
+    }
+  }
+
+  restorePendingApproval();
+  const latestTurn = history.turns.at(-1);
+  if (latestTurn && terminalRunStatuses.has(latestTurn.status ?? "")) {
+    const belongsToCurrentRun = currentRunID === latestTurn.runId ||
+      messages.value.some((message) => message.runId === latestTurn.runId && message.role === "user");
+    if (belongsToCurrentRun) {
+      const assistant = messages.value.find((message) => message.runId === latestTurn.runId && message.role === "assistant");
+      if (assistant) {
+        assistant.streaming = false;
+        for (const activity of assistant.activities) {
+          if (activity.status === "running") activity.status = latestTurn.status === "completed" ? "completed" : "failed";
+        }
+      }
+      if (currentAssistantID === assistant?.id) currentAssistantID = "";
+      currentRunID = "";
+      pendingApprovalTarget = null;
+      waiting.value = false;
+      answering.value = false;
+      activeRun.value = false;
+    }
+  }
+  scrollToBottom();
+}
+
+async function recoverConversation(): Promise<void> {
+  if (recoveryInFlight || historyLoading.value || !(activeRun.value || waiting.value || answering.value)) return;
+  recoveryInFlight = true;
+  try {
+    reconcileHistory(await fetchHistory(session.value));
+  } catch {
+    // 后端仍停在断点或 SSE 正在重连时保留当前 UI，下一次轮询继续恢复。
+  } finally {
+    recoveryInFlight = false;
   }
 }
 
@@ -255,6 +402,7 @@ async function loadInitialData(): Promise<void> {
   if (sessionResult.status === "fulfilled") sessions.value = sessionResult.value;
   if (historyResult.status === "fulfilled") applyHistory(historyResult.value);
   else messages.value = [{ id: newLocalID("notice"), role: "notice", content: `历史加载失败：${historyResult.reason}`, activities: [] }];
+  historyLoading.value = false;
 }
 
 async function changeUser(): Promise<void> {
@@ -296,17 +444,32 @@ async function refreshSessions(): Promise<void> {
 
 function connect(): void {
   eventSource?.close();
+  online.value = false;
+  statusText.value = "连接中";
   eventSource = new EventSource(`/api/stream?session=${encodeURIComponent(session.value)}`);
-  eventSource.onmessage = (event) => {
+  const receive = (event: MessageEvent<string>) => {
     try {
       handleAguiEvent(JSON.parse(event.data) as AguiEvent);
     } catch {
       // Ignore malformed third-party/proxy events and keep the stream alive.
     }
   };
+  eventSource.onmessage = receive;
+  // 兼容带 `event: TYPE` 的 AG-UI SSE 服务；Go 后端当前使用默认 message 事件。
+  for (const type of [
+    "SESSION", "RUN_STARTED", "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_END",
+    "REASONING_MESSAGE_START", "REASONING_MESSAGE_CONTENT", "REASONING_MESSAGE_END",
+    "TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END", "TOOL_CALL_RESULT", "CUSTOM", "RUN_FINISHED",
+  ]) eventSource.addEventListener(type, receive as EventListener);
+  eventSource.onopen = () => {
+    online.value = true;
+    statusText.value = "在线";
+    void recoverConversation();
+  };
   eventSource.onerror = () => {
     online.value = false;
-    statusText.value = "连接断开，正在重连";
+    statusText.value = "连接断开，正在恢复 Run";
+    void recoverConversation();
   };
 }
 
@@ -315,9 +478,18 @@ function handleAguiEvent(event: AguiEvent): void {
     case "SESSION":
       online.value = true;
       statusText.value = "在线";
+      void recoverConversation();
       return;
     case "RUN_STARTED":
+      currentRunID = event.runId ?? currentRunID;
       activeRun.value = true;
+      for (let index = messages.value.length - 1; index >= 0; index--) {
+        const message = messages.value[index];
+        if (message.role === "user" && !message.runId) {
+          message.runId = currentRunID || undefined;
+          break;
+        }
+      }
       return;
     case "TEXT_MESSAGE_START": {
       const assistant = ensureAssistant();
@@ -340,7 +512,10 @@ function handleAguiEvent(event: AguiEvent): void {
       return;
     case "REASONING_MESSAGE_START": {
       const assistant = ensureAssistant();
-      const activity: AgentActivity = { id: newLocalID("reasoning"), kind: "reasoning", title: "思考过程", content: "", status: "running" };
+      const activity: AgentActivity = {
+        id: event.messageId || newLocalID("reasoning"), kind: "reasoning", title: "思考过程",
+        content: "", status: "running", runId: currentRunID || undefined,
+      };
       assistant.activities.push(activity);
       if (event.messageId) reasoningMessageMap.set(event.messageId, { messageID: assistant.id, activityID: activity.id });
       return;
@@ -350,7 +525,10 @@ function handleAguiEvent(event: AguiEvent): void {
       let target = reasoningMessageMap.get(event.messageId);
       if (!target) {
         const assistant = ensureAssistant();
-        const activity: AgentActivity = { id: newLocalID("reasoning"), kind: "reasoning", title: "思考过程", content: "", status: "running" };
+        const activity: AgentActivity = {
+          id: event.messageId || newLocalID("reasoning"), kind: "reasoning", title: "思考过程",
+          content: "", status: "running", runId: currentRunID || undefined,
+        };
         assistant.activities.push(activity);
         target = { messageID: assistant.id, activityID: activity.id };
         reasoningMessageMap.set(event.messageId, target);
@@ -372,8 +550,8 @@ function handleAguiEvent(event: AguiEvent): void {
     case "TOOL_CALL_START": {
       const assistant = ensureAssistant();
       const activity: AgentActivity = {
-        id: newLocalID("tool"), kind: "tool", title: event.toolCallName || "工具调用",
-        content: "", status: "running",
+        id: event.toolCallId || newLocalID("tool"), kind: "tool", title: event.toolCallName || "工具调用",
+        content: "", status: "running", runId: currentRunID || undefined,
       };
       assistant.activities.push(activity);
       if (event.toolCallId) toolCallMap.set(event.toolCallId, { messageID: assistant.id, activityID: activity.id });
@@ -404,12 +582,13 @@ function handleAguiEvent(event: AguiEvent): void {
         // SSE 重连可能错过 TOOL_CALL_START。结果仍应显示，而不是静默丢弃。
         const assistant = ensureAssistant();
         assistant.activities.push({
-          id: newLocalID("tool"),
+          id: event.toolCallId || newLocalID("tool"),
           kind: "tool",
           title: event.toolCallName || "工具调用",
           content: "",
           result: event.content || "（空结果）",
           status: "completed",
+          runId: currentRunID || undefined,
         });
       }
       return;
@@ -421,6 +600,7 @@ function handleAguiEvent(event: AguiEvent): void {
       return;
     case "RUN_FINISHED":
       finishCurrentAssistant();
+      currentRunID = "";
       pendingApprovalTarget = null;
       waiting.value = false;
       answering.value = false;
@@ -444,6 +624,7 @@ function showQuestion(question: string, options: string[], runId?: string): void
     );
   if (duplicate) {
     currentAssistantID = duplicate.message.id;
+    currentRunID = duplicate.activity.runId || duplicate.message.runId || runId || currentRunID;
     pendingApprovalTarget = { messageID: duplicate.message.id, activityID: duplicate.activity.id };
     answering.value = true;
     waiting.value = false;
@@ -453,8 +634,12 @@ function showQuestion(question: string, options: string[], runId?: string): void
   }
 
   const assistant = ensureAssistant();
+  if (runId) {
+    currentRunID = runId;
+    assistant.runId = runId;
+  }
   const activity: AgentActivity = {
-    id: newLocalID("approval"),
+    id: runId ? `approval-${runId}` : newLocalID("approval"),
     kind: "approval",
     title: options.includes("Allow once") ? "工具权限确认" : "需要你的回答",
     content: question,
@@ -477,6 +662,7 @@ async function submitMessage(forcedText?: string, approvalActivityID?: string): 
   if (!text || waiting.value) return;
 
   const answeringQuestion = answering.value;
+  if (!answeringQuestion && (!online.value || historyLoading.value)) return;
   const approval = pendingApproval();
   if (answeringQuestion) {
     if (approvalActivityID && approval?.id !== approvalActivityID) return;
@@ -500,6 +686,7 @@ async function submitMessage(forcedText?: string, approvalActivityID?: string): 
   try {
     await sendMessage(session.value, text);
     if (answeringQuestion) pendingApprovalTarget = null;
+    window.setTimeout(() => void recoverConversation(), 350);
   } catch (cause) {
     if (answeringQuestion && approval) {
       approval.answer = undefined;
@@ -537,10 +724,14 @@ async function switchSession(nextSession: string): Promise<void> {
   textMessageMap.clear();
   reasoningMessageMap.clear();
   toolCallMap.clear();
+  currentRunID = "";
+  online.value = false;
+  historyLoading.value = true;
   session.value = nextSession;
   updateSessionLocation();
   const history = await fetchHistory(session.value).catch(() => ({ messages: [], turns: [] }));
   applyHistory(history);
+  historyLoading.value = false;
   sidebarOpen.value = window.innerWidth >= 1080;
   connect();
   scrollToBottom();
@@ -589,6 +780,7 @@ onMounted(async () => {
   if (!configOnly) {
     await loadInitialData();
     connect();
+    recoveryTimer = window.setInterval(() => void recoverConversation(), 1000);
     scrollToBottom();
     composerInput.value?.focus();
   }
@@ -598,6 +790,7 @@ onBeforeUnmount(() => {
 	window.removeEventListener("yomi-data-reset", handleDataReset);
   eventSource?.close();
   if (animationFrame) cancelAnimationFrame(animationFrame);
+  if (recoveryTimer) window.clearInterval(recoveryTimer);
 });
 </script>
 
@@ -671,7 +864,7 @@ onBeforeUnmount(() => {
             ></textarea>
             <div class="composer-actions">
               <span>{{ answering ? "正在等待你的回答" : "Enter 发送 · Shift + Enter 换行" }}</span>
-              <button v-if="activeRun" class="stop-button" type="button" title="停止任务" @click="cancelActiveRun"><Square :size="13" fill="currentColor" /></button>
+              <button v-if="activeRun && !answering" class="stop-button" type="button" title="停止任务" @click="cancelActiveRun"><Square :size="13" fill="currentColor" /></button>
               <button v-else class="send-button" type="button" :disabled="!canSend" title="发送" @click="submitMessage()"><ArrowUp :size="18" /></button>
             </div>
           </div>

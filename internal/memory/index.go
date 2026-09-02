@@ -39,15 +39,15 @@ type SemanticHit struct {
 	Score float64
 }
 
-// SemanticSearcher is an optional read extension for vector indexes. The
-// canonical MemoryStore is still responsible for hydrating and validating IDs.
+// SemanticSearcher 是向量索引的可选只读扩展。
+// 补全数据并校验 ID 的职责仍由权威 MemoryStore 承担。
 type SemanticSearcher interface {
 	Search(ctx context.Context, vector []float32, query Query) ([]SemanticHit, error)
 }
 
-// Reranker is an optional cross-encoder/neural reranking hook. It receives the
-// fused candidate list and may return a reordered list. Implementations are
-// intentionally external so deployments can choose a local or hosted model.
+// Reranker 是可选的交叉编码器或神经网络重排钩子。它接收融合后的候选列表，
+// 并可以返回重新排序的结果。具体实现被有意放在外部，以便部署时选择本地模型
+// 或托管模型。
 type Reranker interface {
 	Rerank(ctx context.Context, query string, items []Memory) ([]Memory, error)
 }
