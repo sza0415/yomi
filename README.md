@@ -154,15 +154,22 @@ export SZABOT_WEB_ADDR=127.0.0.1:8080
 go run ./cmd/szabot
 ```
 
-Web 前端源码位于 `internal/channels/web/frontend`，使用 Vue 3 + Vite 构建；构建产物会嵌入 Go 二进制，运行时不需要 Node：
+Go Web channel 只提供 `/api` 与 SSE，不再内嵌或托管前端文件。Vue 3 + TypeScript + Vite 前端独立位于仓库根目录 `web`，开发时需要分别启动后端和前端：
 
 ```bash
-cd internal/channels/web/frontend
+# 终端 1：Agent HTTP/SSE 后端
+export SZABOT_WEB=1
+export SZABOT_WEB_ADDR=127.0.0.1:8080
+go run ./cmd/szabot
+
+# 终端 2：Vue 前端
+cd web
 npm install
-npm run build
+npm run typecheck
+npm run dev
 ```
 
-也可以在 `internal/channels` 目录执行 `go generate` 自动刷新嵌入资源。
+前端默认把 `/api` 代理到 `http://127.0.0.1:8080`，浏览器访问 Vite 输出的地址（默认 `http://localhost:5173`）。生产构建使用 `npm run build`，产物只保存在 `web/dist`。
 
 ### Tool 接入
 
@@ -246,8 +253,8 @@ go run ./cmd/szabot
 
 输入一条消息后会收到 `echo:` 回复；按 Ctrl+C 退出。
 
-如果使用 Web 界面，可执行 `SZABOT_WEB=1 go run ./cmd/szabot`，然后打开
-`http://localhost:8080`。顶部的“配置”页会展示本次启动实际生效的配置、默认值、每项作用、
+如果使用 Web 界面，先执行 `SZABOT_WEB=1 go run ./cmd/szabot` 启动 API 后端，
+再到 `web` 目录运行 `npm run dev` 并打开 Vite 地址。顶部的“配置”页会展示本次启动实际生效的配置、默认值、每项作用、
 是否已配置以及是否需要重启。个人项目模式下配置页会显示完整 API key，建议只在本机访问。
 首次运行只需保持默认的 Echo Provider，确认链路正常后再按页面说明配置真实模型或记忆增强能力。
 

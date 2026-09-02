@@ -186,8 +186,9 @@ func TestAGUITranslatorQuestion(t *testing.T) {
 
 	_ = tr.start()
 	_ = tr.handle(bus.OutboundMessage{
-		Kind: bus.KindQuestion, Text: "选哪个？",
-		Meta: map[string]any{"options": []string{"A", "B"}},
+		RunID: "run-question", Kind: bus.KindQuestion,
+		Text: "选哪个？\n可选项：\n  1. A\n  2. B",
+		Meta: map[string]any{"question": "选哪个？", "options": []string{"A", "B"}},
 	})
 
 	// 应有一条 CUSTOM 事件，name=ASK_USER_QUESTION，携带 question 与 options。
@@ -203,6 +204,9 @@ func TestAGUITranslatorQuestion(t *testing.T) {
 	}
 	if found.Payload["name"] != "ASK_USER_QUESTION" {
 		t.Fatalf("CUSTOM name = %v", found.Payload["name"])
+	}
+	if found.Payload["runId"] != "run-question" {
+		t.Fatalf("CUSTOM runId = %v", found.Payload["runId"])
 	}
 	value, ok := found.Payload["value"].(map[string]any)
 	if !ok || value["question"] != "选哪个？" {

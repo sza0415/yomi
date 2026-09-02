@@ -21,9 +21,10 @@ import (
 // 方便直接调 handler 与 deliver 做单元测试。
 func newTestWeb(b *bus.MessageBus) *WebChannel {
 	return &WebChannel{
-		ID:          "web",
-		Bus:         b,
-		subscribers: make(map[string]map[*subscriber]struct{}),
+		ID:               "web",
+		Bus:              b,
+		subscribers:      make(map[string]map[*subscriber]struct{}),
+		pendingQuestions: make(map[string]bus.OutboundMessage),
 	}
 }
 
@@ -76,6 +77,16 @@ func TestHandleSendRejectsEmpty(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestNewSessionIDIsWindowsSafe(t *testing.T) {
+	id := newSessionID()
+	if !strings.HasPrefix(id, "web-") {
+		t.Fatalf("newSessionID() = %q, want web- prefix", id)
+	}
+	if strings.ContainsAny(id, `<>:"/\|?*`) {
+		t.Fatalf("newSessionID() = %q, contains a Windows-invalid filename character", id)
 	}
 }
 
@@ -252,6 +263,50 @@ func TestSessionAPIListsAndLoadsHistory(t *testing.T) {
 	}
 }
 
+func TestBuildSessionTimelineRestoresAgentActivities(t *testing.T) {
+	now := time.Now()
+	events := []tracing.Event{
+		{Sequence: 1, Timestamp: now, SessionID: "S", RunID: "R", Type: tracing.EventInputReceived, Data: map[string]any{"content": "检查文件"}},
+		{Sequence: 2, Timestamp: now, SessionID: "S", RunID: "R", Type: tracing.EventAssistantCompleted, Data: map[string]any{"message": providers.Message{
+			Role: providers.RoleAssistant, Reasoning: "先读取 artifact", ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "artifact_read", Arguments: json.RawMessage(`{"artifact_id":"a1"}`)}},
+		}}},
+		{Sequence: 3, Timestamp: now, SessionID: "S", RunID: "R", Type: tracing.EventToolExecutionStarted, Status: "running", Data: map[string]any{"tool_call_id": "call-1", "tool_name": "artifact_read", "arguments": `{"artifact_id":"a1"}`}},
+		{Sequence: 4, Timestamp: now, SessionID: "S", RunID: "R", Type: tracing.EventUserQuestionAsked, Status: "waiting_user", Data: map[string]any{"question": "Allow tool?", "options": []string{"Allow once", "Allow always", "Deny"}}},
+	}
+
+	turns := buildSessionTimeline(events)
+	if len(turns) != 1 || turns[0].User != "检查文件" || len(turns[0].Activities) != 3 {
+		t.Fatalf("timeline = %#v", turns)
+	}
+	if turns[0].Activities[0].Kind != "reasoning" || turns[0].Activities[0].Content != "先读取 artifact" {
+		t.Fatalf("reasoning activity = %#v", turns[0].Activities[0])
+	}
+	if turns[0].Activities[1].Kind != "tool" || turns[0].Activities[1].Title != "artifact_read" {
+		t.Fatalf("tool activity = %#v", turns[0].Activities[1])
+	}
+	approval := turns[0].Activities[2]
+	if approval.Kind != "approval" || approval.Status != "waiting" || len(approval.Options) != 3 {
+		t.Fatalf("approval activity = %#v", approval)
+	}
+
+	events = append(events,
+		tracing.Event{Sequence: 5, Timestamp: now, SessionID: "S", RunID: "R", Type: tracing.EventUserQuestionAnswered, Data: map[string]any{"answer": "Allow once"}},
+		tracing.Event{Sequence: 6, Timestamp: now, SessionID: "S", RunID: "R", Type: tracing.EventToolExecutionFinished, Status: "completed", Data: map[string]any{"tool_call_id": "call-1", "tool_name": "artifact_read", "result": "artifact body"}},
+		tracing.Event{Sequence: 7, Timestamp: now, SessionID: "S", RunID: "R", Type: tracing.EventAssistantCompleted, Data: map[string]any{"message": providers.Message{Role: providers.RoleAssistant, Content: "读取完成"}}},
+		tracing.Event{Sequence: 8, Timestamp: now, SessionID: "S", RunID: "R", Type: tracing.EventRunFinished, Status: "completed"},
+	)
+	turns = buildSessionTimeline(events)
+	if turns[0].Activities[1].Status != "completed" || turns[0].Activities[1].Result != "artifact body" {
+		t.Fatalf("completed tool activity = %#v", turns[0].Activities[1])
+	}
+	if turns[0].Activities[2].Status != "completed" || turns[0].Activities[2].Answer != "Allow once" {
+		t.Fatalf("answered approval activity = %#v", turns[0].Activities[2])
+	}
+	if turns[0].Assistant != "读取完成" || turns[0].Status != "completed" {
+		t.Fatalf("completed turn = %#v", turns[0])
+	}
+}
+
 // TestDeliverRoutesBySession 验证出站消息只投给匹配 SessionID 的订阅者，
 // 其他 session 的订阅者收不到——这是 Web 多连接场景的核心正确性。
 func TestDeliverRoutesBySession(t *testing.T) {
@@ -279,6 +334,69 @@ func TestDeliverRoutesBySession(t *testing.T) {
 		t.Fatalf("subB should NOT receive session A's message, got %q", out.Text)
 	case <-time.After(50 * time.Millisecond):
 		// 正确：B 收不到。
+	}
+}
+
+func TestPendingQuestionSurvivesDisconnectUntilAnswer(t *testing.T) {
+	b := bus.New(16)
+	w := newTestWeb(b)
+	ctx := context.Background()
+
+	question := bus.OutboundMessage{
+		ChannelID: "web", SessionID: "S", RunID: "run-approval",
+		Kind: bus.KindQuestion, Text: "Allow tool?",
+		Meta: map[string]any{
+			"question": "Allow tool?",
+			"options":  []string{"Allow once", "Allow always", "Deny"},
+		},
+	}
+	w.deliver(question)
+
+	pending, ok := w.pendingQuestion("S")
+	if !ok || pending.RunID != "run-approval" || pending.Text != "Allow tool?" {
+		t.Fatalf("pending question = %#v, %v", pending, ok)
+	}
+
+	body, _ := json.Marshal(sendRequest{Session: "S", Text: "Allow once"})
+	req := httptest.NewRequest(http.MethodPost, "/api/send", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	w.handleSend(ctx)(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("answer status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, ok := w.pendingQuestion("S"); ok {
+		t.Fatal("pending question was not cleared after the answer was published")
+	}
+}
+
+func TestStreamReplaysPendingQuestion(t *testing.T) {
+	w := newTestWeb(bus.New(16))
+	w.deliver(bus.OutboundMessage{
+		ChannelID: "web", SessionID: "S", RunID: "run-approval",
+		Kind: bus.KindQuestion, Text: "Allow tool?",
+		Meta: map[string]any{
+			"question": "Allow tool?",
+			"options":  []string{"Allow once", "Allow always", "Deny"},
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/stream", w.handleStream)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/stream?session=S", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("stream request error: %v", err)
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+	line := waitForLine(t, reader, `"type":"CUSTOM"`)
+	if !strings.Contains(line, `"ASK_USER_QUESTION"`) || !strings.Contains(line, `"Allow once"`) {
+		t.Fatalf("replayed question payload = %s", line)
 	}
 }
 

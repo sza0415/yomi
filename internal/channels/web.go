@@ -2,10 +2,8 @@ package channels
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"log"
 	"net/http"
 	"strings"
@@ -14,15 +12,9 @@ import (
 
 	"github.com/ziangsun/szabot/internal/agent"
 	"github.com/ziangsun/szabot/internal/bus"
+	"github.com/ziangsun/szabot/internal/providers"
 	tracing "github.com/ziangsun/szabot/internal/trace"
 )
-
-// webDist 把 Vite 构建后的前端资源嵌进二进制里，
-// 这样 yomi 依然是"一个可执行文件、零外部资源"。
-//
-//go:generate sh -c "cd web/frontend && npm install && npm run build"
-//go:embed web/dist
-var webDist embed.FS
 
 // WebChannel 是基于 HTTP 的 channel：浏览器通过它跟 agent 对话。
 //
@@ -69,6 +61,10 @@ type WebChannel struct {
 	// 一个 SessionID 理论上可能有多个连接（同一会话开了多个标签页），
 	// 所以 value 是一个集合。
 	subscribers map[string]map[*subscriber]struct{}
+	// pendingQuestions 保存尚未得到用户回答的问题。权限 Hook 会在工具执行
+	// 中途阻塞；如果浏览器刷新或 SSE 短暂断线，新连接必须能重新拿到确认卡，
+	// 否则 Run 会永远停在 waiting_user。
+	pendingQuestions map[string]bus.OutboundMessage
 }
 
 // subscriber 代表一个在线的 SSE 连接。
@@ -102,6 +98,7 @@ func (w *WebChannel) Start(ctx context.Context) error {
 		w.Addr = ":8080"
 	}
 	w.subscribers = make(map[string]map[*subscriber]struct{})
+	w.pendingQuestions = make(map[string]bus.OutboundMessage)
 
 	// 出站分发：全局唯一的 goroutine 读 bus，按 SessionID 投递。
 	if w.Bus != nil {
@@ -109,11 +106,7 @@ func (w *WebChannel) Start(ctx context.Context) error {
 	}
 
 	mux := http.NewServeMux()
-	distFS, err := fs.Sub(webDist, "web/dist")
-	if err != nil {
-		return fmt.Errorf("prepare web assets: %w", err)
-	}
-	mux.Handle("/", http.FileServer(http.FS(distFS)))
+	mux.HandleFunc("/", w.handleAPIIndex)
 	mux.HandleFunc("/api/send", w.handleSend(ctx))
 	mux.HandleFunc("/api/cancel", w.handleCancel)
 	mux.HandleFunc("/api/stream", w.handleStream)
@@ -192,13 +185,21 @@ func (w *WebChannel) dispatch(ctx context.Context) {
 
 // deliver 把一条出站消息投递给指定 session 的全部订阅者。
 func (w *WebChannel) deliver(out bus.OutboundMessage) {
-	w.mu.RLock()
+	w.mu.Lock()
+	if w.pendingQuestions == nil {
+		w.pendingQuestions = make(map[string]bus.OutboundMessage)
+	}
+	if out.Kind == bus.KindQuestion {
+		w.pendingQuestions[out.SessionID] = cloneQuestion(out)
+	} else if out.Done {
+		delete(w.pendingQuestions, out.SessionID)
+	}
 	subs := w.subscribers[out.SessionID]
 	targets := make([]*subscriber, 0, len(subs))
 	for s := range subs {
 		targets = append(targets, s)
 	}
-	w.mu.RUnlock()
+	w.mu.Unlock()
 
 	for _, s := range targets {
 		select {
@@ -208,6 +209,34 @@ func (w *WebChannel) deliver(out bus.OutboundMessage) {
 			// 保证 dispatch 永不阻塞，不拖垮整个出站链路。
 		}
 	}
+}
+
+func cloneQuestion(out bus.OutboundMessage) bus.OutboundMessage {
+	clone := out
+	if out.Meta != nil {
+		clone.Meta = make(map[string]any, len(out.Meta))
+		for key, value := range out.Meta {
+			if options, ok := value.([]string); ok {
+				clone.Meta[key] = append([]string(nil), options...)
+				continue
+			}
+			clone.Meta[key] = value
+		}
+	}
+	return clone
+}
+
+func (w *WebChannel) pendingQuestion(sessionID string) (bus.OutboundMessage, bool) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	out, ok := w.pendingQuestions[sessionID]
+	return cloneQuestion(out), ok
+}
+
+func (w *WebChannel) clearPendingQuestion(sessionID string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.pendingQuestions, sessionID)
 }
 
 // addSubscriber / removeSubscriber 维护 session → 连接集合的映射。
@@ -236,19 +265,21 @@ func (w *WebChannel) removeSubscriber(s *subscriber) {
 	delete(w.subscribers, s.sessionID)
 }
 
-// handleIndex 返回内嵌的前端入口。保留该方法供轻量 handler 测试和嵌入式调用使用。
-func (w *WebChannel) handleIndex(rw http.ResponseWriter, r *http.Request) {
+// handleAPIIndex 只描述当前 HTTP 服务。Vue 前端已独立到仓库根目录 web/，
+// 开发和发布均由该工程负责；Go channel 不再携带或托管静态资源。
+func (w *WebChannel) handleAPIIndex(rw http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(rw, r)
 		return
 	}
-	data, err := webDist.ReadFile("web/dist/index.html")
-	if err != nil {
-		http.Error(rw, "index not found", http.StatusInternalServerError)
-		return
-	}
-	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = rw.Write(data)
+	writeJSON(rw, map[string]any{
+		"service": "yomi-web-api",
+		"status":  "ok",
+		"frontend": map[string]string{
+			"directory": "web",
+			"command":   "npm run dev",
+		},
+	})
 }
 
 type traceRunView struct {
@@ -321,9 +352,30 @@ func (w *WebChannel) handleSessions(rw http.ResponseWriter, r *http.Request) {
 	writeJSON(rw, map[string]any{"sessions": sessions})
 }
 
-// handleSessionMessages returns Conversation history without the system
-// prompt. Trace/reasoning events are not synthesized here; this endpoint is
-// deliberately limited to messages that can be sent back to the provider.
+type sessionActivityView struct {
+	ID      string   `json:"id"`
+	Kind    string   `json:"kind"`
+	Title   string   `json:"title"`
+	Content string   `json:"content"`
+	Result  string   `json:"result,omitempty"`
+	Status  string   `json:"status"`
+	RunID   string   `json:"runId,omitempty"`
+	Options []string `json:"options,omitempty"`
+	Answer  string   `json:"answer,omitempty"`
+}
+
+type sessionTurnView struct {
+	RunID      string                `json:"runId"`
+	User       string                `json:"user"`
+	Assistant  string                `json:"assistant"`
+	Status     string                `json:"status,omitempty"`
+	Activities []sessionActivityView `json:"activities"`
+}
+
+// handleSessionMessages returns the provider-safe Conversation plus a
+// display-only timeline reconstructed from Trace. The timeline lets the Web UI
+// restore reasoning, tool execution/results, and pending approvals after a
+// refresh without feeding those internal events back into the model context.
 func (w *WebChannel) handleSessionMessages(rw http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
@@ -343,7 +395,142 @@ func (w *WebChannel) handleSessionMessages(rw http.ResponseWriter, r *http.Reque
 		http.Error(rw, "load session failed", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(rw, map[string]any{"session_id": sessionID, "messages": history})
+	turns := []sessionTurnView{}
+	if w.Trace != nil {
+		if events, traceErr := w.Trace.ReadSession(sessionID); traceErr == nil {
+			turns = buildSessionTimeline(events)
+		}
+	}
+	writeJSON(rw, map[string]any{"session_id": sessionID, "messages": history, "turns": turns})
+}
+
+func buildSessionTimeline(events []tracing.Event) []sessionTurnView {
+	turns := make([]sessionTurnView, 0)
+	turnIndex := make(map[string]int)
+	toolIndex := make(map[string]map[string]int)
+
+	ensureTurn := func(runID string) *sessionTurnView {
+		if index, ok := turnIndex[runID]; ok {
+			return &turns[index]
+		}
+		turnIndex[runID] = len(turns)
+		toolIndex[runID] = make(map[string]int)
+		turns = append(turns, sessionTurnView{RunID: runID, Activities: []sessionActivityView{}})
+		return &turns[len(turns)-1]
+	}
+
+	for _, event := range events {
+		if event.RunID == "" {
+			continue
+		}
+		turn := ensureTurn(event.RunID)
+		switch event.Type {
+		case tracing.EventInputReceived:
+			turn.User, _ = event.Data["content"].(string)
+		case tracing.EventAssistantCompleted:
+			var message providers.Message
+			if raw, err := json.Marshal(event.Data["message"]); err == nil {
+				_ = json.Unmarshal(raw, &message)
+			}
+			if message.Reasoning != "" {
+				turn.Activities = append(turn.Activities, sessionActivityView{
+					ID: fmt.Sprintf("%s-reasoning-%d", event.RunID, event.Sequence), Kind: "reasoning",
+					Title: "思考过程", Content: message.Reasoning, Status: "completed", RunID: event.RunID,
+				})
+			}
+			for _, call := range message.ToolCalls {
+				if _, exists := toolIndex[event.RunID][call.ID]; exists {
+					continue
+				}
+				toolIndex[event.RunID][call.ID] = len(turn.Activities)
+				turn.Activities = append(turn.Activities, sessionActivityView{
+					ID: call.ID, Kind: "tool", Title: call.Name, Content: string(call.Arguments),
+					Status: "running", RunID: event.RunID,
+				})
+			}
+			if strings.TrimSpace(message.Content) != "" {
+				if turn.Assistant != "" {
+					turn.Assistant += "\n\n"
+				}
+				turn.Assistant += message.Content
+			}
+		case tracing.EventToolExecutionStarted:
+			toolID, _ := event.Data["tool_call_id"].(string)
+			toolName, _ := event.Data["tool_name"].(string)
+			arguments, _ := event.Data["arguments"].(string)
+			index, exists := toolIndex[event.RunID][toolID]
+			if !exists {
+				index = len(turn.Activities)
+				toolIndex[event.RunID][toolID] = index
+				turn.Activities = append(turn.Activities, sessionActivityView{ID: toolID, Kind: "tool", RunID: event.RunID})
+			}
+			activity := &turn.Activities[index]
+			activity.Title, activity.Content, activity.Status = toolName, arguments, "running"
+		case tracing.EventToolExecutionFinished, tracing.EventToolExecutionFailed:
+			toolID, _ := event.Data["tool_call_id"].(string)
+			index, exists := toolIndex[event.RunID][toolID]
+			if !exists {
+				index = len(turn.Activities)
+				toolIndex[event.RunID][toolID] = index
+				toolName, _ := event.Data["tool_name"].(string)
+				turn.Activities = append(turn.Activities, sessionActivityView{ID: toolID, Kind: "tool", Title: toolName, RunID: event.RunID})
+			}
+			activity := &turn.Activities[index]
+			activity.Result, _ = event.Data["result"].(string)
+			if failure, ok := event.Data["error"].(string); ok && failure != "" {
+				activity.Result = failure
+				activity.Status = "failed"
+			} else {
+				activity.Status = "completed"
+			}
+		case tracing.EventUserQuestionAsked:
+			question, _ := event.Data["question"].(string)
+			turn.Activities = append(turn.Activities, sessionActivityView{
+				ID: fmt.Sprintf("%s-approval-%d", event.RunID, event.Sequence), Kind: "approval",
+				Title: approvalTitle(stringSlice(event.Data["options"])), Content: question,
+				Status: "waiting", RunID: event.RunID, Options: stringSlice(event.Data["options"]),
+			})
+		case tracing.EventUserQuestionAnswered:
+			for index := len(turn.Activities) - 1; index >= 0; index-- {
+				activity := &turn.Activities[index]
+				if activity.Kind == "approval" && activity.Status == "waiting" {
+					activity.Answer, _ = event.Data["answer"].(string)
+					activity.Status = "completed"
+					break
+				}
+			}
+		case tracing.EventRunFinished:
+			turn.Status = event.Status
+		}
+	}
+
+	return turns
+}
+
+func stringSlice(value any) []string {
+	switch options := value.(type) {
+	case []string:
+		return append([]string(nil), options...)
+	case []any:
+		result := make([]string, 0, len(options))
+		for _, option := range options {
+			if text, ok := option.(string); ok {
+				result = append(result, text)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func approvalTitle(options []string) string {
+	for _, option := range options {
+		if option == "Allow once" {
+			return "工具权限确认"
+		}
+	}
+	return "需要你的回答"
 }
 
 // handleTraces 返回一个 Session 下按 Run 分组的 Trace 摘要。
@@ -623,6 +810,9 @@ func (w *WebChannel) handleSend(ctx context.Context) http.HandlerFunc {
 			http.Error(rw, "publish failed", http.StatusServiceUnavailable)
 			return
 		}
+		// pending question 的唯一合法推进方式就是同一 session 的下一条输入。
+		// Publish 成功后再清理，失败时保留确认卡供用户重试。
+		w.clearPendingQuestion(session)
 
 		rw.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(rw).Encode(map[string]string{"session": session})
@@ -657,6 +847,7 @@ func (w *WebChannel) handleCancel(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.OnCancel(session)
+	w.clearPendingQuestion(session)
 
 	rw.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(rw).Encode(map[string]any{"session": session, "cancelled": true})
@@ -702,6 +893,13 @@ func (w *WebChannel) handleStream(rw http.ResponseWriter, r *http.Request) {
 	if err := translator.start(); err != nil {
 		return
 	}
+	// 权限确认和 ask_user_question 都可能跨页面刷新/SSE 重连等待。
+	// 重放当前 pending 问题，避免后端等待而前端没有可操作入口。
+	if pending, ok := w.pendingQuestion(session); ok {
+		if err := translator.handle(pending); err != nil {
+			return
+		}
+	}
 
 	// 心跳：定期发注释行，避免中间代理把空闲连接掐断。
 	heartbeat := time.NewTicker(15 * time.Second)
@@ -727,5 +925,7 @@ func (w *WebChannel) handleStream(rw http.ResponseWriter, r *http.Request) {
 // newSessionID 生成一个基于时间戳的会话 ID。
 // Web 场景对唯一性要求不高（本地单机为主），时间戳纳秒足够区分。
 func newSessionID() string {
-	return fmt.Sprintf("web:%d", time.Now().UnixNano())
+	// 会话 ID 会参与生成持久化文件和 artifact 目录名。
+	// Windows 不允许文件名包含冒号，因此只使用跨平台安全的分隔符。
+	return fmt.Sprintf("web-%d", time.Now().UnixNano())
 }

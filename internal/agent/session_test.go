@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ziangsun/szabot/internal/bus"
@@ -73,6 +75,36 @@ func TestSessionStoreRoundTrip(t *testing.T) {
 	}
 	if p := filepath.Join(dir, "s1.jsonl"); p == "" {
 		t.Fatal("unexpected empty path")
+	}
+}
+
+func TestSessionStoreWindowsUnsafeIDRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewSessionStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sessionID = "web:1700000000000:abc123"
+	if err := store.Append(sessionID, providers.Message{Role: providers.RoleUser, Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ":") {
+			t.Fatalf("persisted filename %q is not Windows-safe", entry.Name())
+		}
+	}
+
+	sessions, err := store.ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].ID != sessionID {
+		t.Fatalf("ListSessions() = %#v, want original session ID %q", sessions, sessionID)
 	}
 }
 
