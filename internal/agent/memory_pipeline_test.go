@@ -4,9 +4,12 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ziangsun/szabot/internal/bus"
 	"github.com/ziangsun/szabot/internal/memory"
+	"github.com/ziangsun/szabot/internal/providers"
+	"github.com/ziangsun/szabot/internal/tools"
 	tracing "github.com/ziangsun/szabot/internal/trace"
 )
 
@@ -136,5 +139,251 @@ func TestMemoryPipelineSupersedesExplicitReplacement(t *testing.T) {
 	}
 	if len(indexer.deletedIDs) != 1 || indexer.deletedIDs[0] != "mem-old" {
 		t.Fatalf("deleted index IDs = %#v", indexer.deletedIDs)
+	}
+}
+
+func TestMemoryPipelineConfirmsAmbiguousReplacementInLightweightRun(t *testing.T) {
+	loop, store, messageBus, sourceRun, cancel := newMemoryConfirmationFixture(t, time.Second)
+	defer cancel()
+
+	loop.startMemoryExtraction(context.Background(), sourceRun, ambiguousReplacementInbound(), "好的")
+	question := waitForMemoryQuestion(t, messageBus)
+	if question.SessionID != sourceRun.SessionID || question.RunID == "" || question.RunID == sourceRun.ID {
+		t.Fatalf("confirmation question = %#v, want a lightweight run in the source session", question)
+	}
+	old, err := store.Get(context.Background(), "alice", "mem-old")
+	if err != nil || old.Status != memory.StatusActive {
+		t.Fatalf("old memory changed before confirmation: %#v, err=%v", old, err)
+	}
+	if got, err := store.Search(context.Background(), memory.Query{UserID: "alice", Text: "上海", Limit: 8}); err != nil || len(got) != 0 {
+		t.Fatalf("new memory was written before confirmation: %#v, err=%v", got, err)
+	}
+
+	if err := messageBus.PublishInbound(context.Background(), bus.InboundMessage{UserID: "alice", SessionID: sourceRun.SessionID, ChannelID: "test", Text: "确认替换"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunDone(t, messageBus, question.RunID)
+
+	old, err = store.Get(context.Background(), "alice", "mem-old")
+	if err != nil || old.Status != memory.StatusSuperseded {
+		t.Fatalf("old memory = %#v, err=%v, want superseded", old, err)
+	}
+	if got, err := store.Search(context.Background(), memory.Query{UserID: "alice", Text: "北京", Limit: 8}); err != nil || len(got) != 0 {
+		t.Fatalf("superseded memory remained recallable: %#v, err=%v", got, err)
+	}
+	got, err := store.Search(context.Background(), memory.Query{UserID: "alice", Text: "上海", Limit: 8})
+	if err != nil || len(got) != 1 || got[0].Status != memory.StatusActive {
+		t.Fatalf("confirmed memory = %#v, err=%v", got, err)
+	}
+	state := sourceRun.Snapshot().Memory
+	if sourceRun.Status != RunCompleted || state.Status != "completed" || state.PendingConfirmationCount != 0 || state.ConfirmedCount != 1 || state.WrittenCount != 1 {
+		t.Fatalf("source run memory state = %#v, run status=%s", state, sourceRun.Status)
+	}
+}
+
+func TestMemoryPipelineRejectsAmbiguousReplacement(t *testing.T) {
+	loop, store, messageBus, sourceRun, cancel := newMemoryConfirmationFixture(t, time.Second)
+	defer cancel()
+
+	loop.startMemoryExtraction(context.Background(), sourceRun, ambiguousReplacementInbound(), "好的")
+	question := waitForMemoryQuestion(t, messageBus)
+	if err := messageBus.PublishInbound(context.Background(), bus.InboundMessage{UserID: "alice", SessionID: sourceRun.SessionID, ChannelID: "test", Text: "拒绝替换"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunDone(t, messageBus, question.RunID)
+
+	assertAmbiguousReplacementDiscarded(t, store, sourceRun)
+}
+
+func TestMemoryPipelineDiscardsAmbiguousReplacementOnTimeout(t *testing.T) {
+	loop, store, messageBus, sourceRun, cancel := newMemoryConfirmationFixture(t, 30*time.Millisecond)
+	defer cancel()
+
+	loop.startMemoryExtraction(context.Background(), sourceRun, ambiguousReplacementInbound(), "好的")
+	question := waitForMemoryQuestion(t, messageBus)
+	waitForRunDone(t, messageBus, question.RunID)
+
+	assertAmbiguousReplacementDiscarded(t, store, sourceRun)
+}
+
+func TestMemoryPipelineDiscardsConfirmationWhenRelatedMemoryChanges(t *testing.T) {
+	loop, store, messageBus, sourceRun, cancel := newMemoryConfirmationFixture(t, time.Second)
+	defer cancel()
+
+	loop.startMemoryExtraction(context.Background(), sourceRun, ambiguousReplacementInbound(), "好的")
+	question := waitForMemoryQuestion(t, messageBus)
+	if err := store.Upsert(context.Background(), memory.Memory{
+		ID: "mem-concurrent", UserID: "alice", Kind: memory.KindFact, Subject: "self",
+		Attribute: "home_city", Value: "深圳", Content: "用户住在深圳", Status: memory.StatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := messageBus.PublishInbound(context.Background(), bus.InboundMessage{UserID: "alice", SessionID: sourceRun.SessionID, ChannelID: "test", Text: "确认替换"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunDone(t, messageBus, question.RunID)
+
+	for _, id := range []string{"mem-old", "mem-concurrent"} {
+		item, err := store.Get(context.Background(), "alice", id)
+		if err != nil || item.Status != memory.StatusActive {
+			t.Fatalf("concurrent memory %s = %#v, err=%v, want active", id, item, err)
+		}
+	}
+	if got, err := store.Search(context.Background(), memory.Query{UserID: "alice", Text: "上海", Limit: 8}); err != nil || len(got) != 0 {
+		t.Fatalf("stale candidate was stored: %#v, err=%v", got, err)
+	}
+	state := sourceRun.Snapshot().Memory
+	if state.DiscardedCount != 1 || state.WrittenCount != 0 || state.Status != "completed" {
+		t.Fatalf("source run memory state = %#v", state)
+	}
+}
+
+func TestMemoryConfirmationRunsAfterSourceRunDone(t *testing.T) {
+	store, err := memory.NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Upsert(context.Background(), memory.Memory{
+		ID: "mem-old", UserID: "alice", Kind: memory.KindFact, Subject: "self",
+		Attribute: "home_city", Value: "北京", Content: "用户住在北京", Status: memory.StatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	messageBus := bus.New(32)
+	loop := &Loop{
+		Bus:    messageBus,
+		Runner: &Runner{Provider: &scriptedProvider{responses: []providers.ChatResponse{{Content: "好的"}}}, Model: "test", Tools: tools.NewRegistry()},
+		Memory: store,
+		MemoryExtractor: pipelineExtractor{candidates: []memory.Candidate{{
+			Kind: memory.KindFact, Subject: "self", Attribute: "home_city", Value: "上海",
+			Content: "用户住在上海", ChangeHint: memory.ChangeHintReplace,
+			Confidence: 0.95, Importance: 0.9,
+		}}},
+		MemoryConfirmationTimeout: time.Second,
+		Trace:                     tracing.NoopSink{},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	loop.Start(ctx)
+	if err := messageBus.PublishInbound(ctx, ambiguousReplacementInbound()); err != nil {
+		t.Fatal(err)
+	}
+
+	var sourceRunID string
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case out := <-messageBus.Outbound():
+			if out.Done && sourceRunID == "" {
+				sourceRunID = out.RunID
+				continue
+			}
+			if out.Kind != bus.KindQuestion {
+				continue
+			}
+			if sourceRunID == "" {
+				t.Fatal("memory confirmation started before the source run finished")
+			}
+			if out.RunID == sourceRunID {
+				t.Fatal("memory confirmation reused the terminal source run")
+			}
+			if err := messageBus.PublishInbound(ctx, bus.InboundMessage{UserID: "alice", SessionID: out.SessionID, ChannelID: "test", Text: "拒绝替换"}); err != nil {
+				t.Fatal(err)
+			}
+			waitForRunDone(t, messageBus, out.RunID)
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for queued memory confirmation")
+		}
+	}
+}
+
+func newMemoryConfirmationFixture(t *testing.T, confirmationTimeout time.Duration) (*Loop, *memory.SQLiteStore, *bus.MessageBus, *Run, context.CancelFunc) {
+	t.Helper()
+	store, err := memory.NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Upsert(context.Background(), memory.Memory{
+		ID: "mem-old", UserID: "alice", Kind: memory.KindFact, Subject: "self",
+		Attribute: "home_city", Value: "北京", Content: "用户住在北京", Status: memory.StatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	messageBus := bus.New(32)
+	loop := &Loop{
+		Bus: messageBus, Memory: store,
+		MemoryExtractor: pipelineExtractor{candidates: []memory.Candidate{{
+			Kind: memory.KindFact, Subject: "self", Attribute: "home_city", Value: "上海",
+			Content: "用户住在上海", ChangeHint: memory.ChangeHintReplace,
+			Confidence: 0.95, Importance: 0.9,
+		}}},
+		MemoryConfirmationTimeout: confirmationTimeout,
+		Trace:                     tracing.NoopSink{},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	loop.Start(ctx)
+	sourceRun := NewRun("session-1", RunBudget{})
+	if err := sourceRun.Transition(RunRunning, "run started"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceRun.Transition(RunCompleted, "answer completed"); err != nil {
+		t.Fatal(err)
+	}
+	return loop, store, messageBus, sourceRun, cancel
+}
+
+func ambiguousReplacementInbound() bus.InboundMessage {
+	return bus.InboundMessage{
+		UserID: "alice", SessionID: "session-1", ChannelID: "test",
+		Text: "我在上海有一套房", Time: time.Now(),
+	}
+}
+
+func waitForMemoryQuestion(t *testing.T, messageBus *bus.MessageBus) bus.OutboundMessage {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case out := <-messageBus.Outbound():
+			if out.Kind == bus.KindQuestion {
+				return out
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for memory confirmation question")
+		}
+	}
+}
+
+func waitForRunDone(t *testing.T, messageBus *bus.MessageBus, runID string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case out := <-messageBus.Outbound():
+			if out.Done && out.RunID == runID {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for run %s to finish", runID)
+		}
+	}
+}
+
+func assertAmbiguousReplacementDiscarded(t *testing.T, store *memory.SQLiteStore, sourceRun *Run) {
+	t.Helper()
+	old, err := store.Get(context.Background(), "alice", "mem-old")
+	if err != nil || old.Status != memory.StatusActive {
+		t.Fatalf("old memory = %#v, err=%v, want active", old, err)
+	}
+	got, err := store.Search(context.Background(), memory.Query{UserID: "alice", Text: "上海", Limit: 8})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("discarded candidate was stored: %#v, err=%v", got, err)
+	}
+	state := sourceRun.Snapshot().Memory
+	if sourceRun.Status != RunCompleted || state.Status != "completed" || state.PendingConfirmationCount != 0 || state.DiscardedCount != 1 || state.WrittenCount != 0 {
+		t.Fatalf("source run memory state = %#v, run status=%s", state, sourceRun.Status)
 	}
 }

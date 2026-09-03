@@ -279,19 +279,21 @@ func main() {
 			Tools:            registry,
 			Memory:           contextMemory,
 		},
-		Memory:          memoryStore,
-		MemoryExtractor: memoryExtractor,
-		MemoryEmbedder:  memoryEmbedder,
-		MemoryIndexer:   memoryIndexer,
-		MemoryTimeout:   envDuration("SZABOT_MEMORY_TIMEOUT", 30*time.Second),
-		RunTimeout:      runTimeout,
-		Budget:          budget,
+		Memory:                    memoryStore,
+		MemoryExtractor:           memoryExtractor,
+		MemoryEmbedder:            memoryEmbedder,
+		MemoryIndexer:             memoryIndexer,
+		MemoryTimeout:             envDuration("SZABOT_MEMORY_TIMEOUT", 30*time.Second),
+		MemoryConfirmationTimeout: envDuration("SZABOT_MEMORY_CONFIRMATION_TIMEOUT", 10*time.Minute),
+		RunTimeout:                runTimeout,
+		Budget:                    budget,
 	}
 	loop.Start(ctx)
 	printRuntimeConfig(provider, model, workspace, rootDir, contextMaxTokens, contextRecentMessages, summaryTimeout, runTimeout, budget, memoryRuntimeConfig{
 		DBPath:              filepath.Join(rootDir, "memories", "memory.db"),
 		ExtractionEnabled:   memoryExtractor != nil,
 		ExtractionTimeout:   envDuration("SZABOT_MEMORY_TIMEOUT", 30*time.Second),
+		ConfirmationTimeout: envDuration("SZABOT_MEMORY_CONFIRMATION_TIMEOUT", 10*time.Minute),
 		QdrantURL:           qdrantURL,
 		QdrantEnabled:       qdrantEnabled,
 		QdrantCollection:    qdrantCollection,
@@ -406,6 +408,7 @@ func buildConfigView(provider, model, workspace, sessionRoot string, maxContext,
 			{Key: "extraction", Env: "SZABOT_MEMORY_EXTRACTION", Value: status(extraction), Default: "真实 Provider 默认启用，echo 默认关闭", Description: "任务完成后从对话中提取事实、偏好和经历。", RestartRequired: true},
 			{Key: "session_dir", Env: "SZABOT_SESSION_DIR", Value: sessionRoot, Default: "工作区/sessionlogs", Description: "会话、Trace、artifacts 和 memory.db 的存储根目录。", RestartRequired: true},
 			{Key: "memory_timeout", Env: "SZABOT_MEMORY_TIMEOUT", Value: envDuration("SZABOT_MEMORY_TIMEOUT", 30*time.Second).String(), Default: "30s", Description: "记忆提取、Embedding 和索引任务的最长执行时间。", RestartRequired: true},
+			{Key: "memory_confirmation_timeout", Env: "SZABOT_MEMORY_CONFIRMATION_TIMEOUT", Value: envDuration("SZABOT_MEMORY_CONFIRMATION_TIMEOUT", 10*time.Minute).String(), Default: "10m", Description: "不明确的记忆替换等待用户确认的最长时间；超时后丢弃新候选。", RestartRequired: true},
 			{Key: "qdrant", Env: "SZABOT_QDRANT_ENABLED", Value: status(qdrant), Default: "启用", Description: "启用 Qdrant 向量索引。首次运行不需要它，关闭也不影响 SQLite 关键词记忆。", RestartRequired: true},
 			{Key: "qdrant_url", Env: "SZABOT_QDRANT_URL", Value: value(qdrantURL), Default: "http://127.0.0.1:6333", Description: "Qdrant 服务地址；本机地址会尝试自动管理 Docker 容器。", RestartRequired: true},
 			{Key: "qdrant_collection", Env: "SZABOT_QDRANT_COLLECTION", Value: qdrantCollection, Default: "yomi_memories", Description: "保存记忆向量的 Collection 名称。", RestartRequired: true},
@@ -467,6 +470,7 @@ type memoryRuntimeConfig struct {
 	DBPath              string
 	ExtractionEnabled   bool
 	ExtractionTimeout   time.Duration
+	ConfirmationTimeout time.Duration
 	QdrantEnabled       bool
 	QdrantURL           string
 	QdrantCollection    string
@@ -499,6 +503,7 @@ func printRuntimeConfig(provider providers.Provider, model, workspace, sessionRo
 	fmt.Printf("  permission_mode=%s\n", permissionMode())
 	fmt.Printf("  memory.db=%s sqlite_fts5=enabled extraction=%s extraction_timeout=%s\n",
 		memoryConfig.DBPath, enabledText(memoryConfig.ExtractionEnabled), memoryConfig.ExtractionTimeout)
+	fmt.Printf("  memory.confirmation_timeout=%s\n", memoryConfig.ConfirmationTimeout)
 	fmt.Printf("  memory.layers=profile(fact,preference):limit=4 episode(episode):limit=4\n")
 	fmt.Printf("  memory.embedding.base_url=%s model=%s api_key=%s\n",
 		valueText(memoryConfig.EmbeddingBaseURL), valueText(memoryConfig.EmbeddingModel), configuredText(memoryConfig.EmbeddingKeyPresent))

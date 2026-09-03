@@ -44,14 +44,18 @@ type RunUsage struct {
 }
 
 type MemoryRunState struct {
-	Status         string    `json:"status"` // pending | running | completed | failed
-	CandidateCount int       `json:"candidate_count,omitempty"`
-	RejectedCount  int       `json:"rejected_count,omitempty"`
-	WrittenCount   int       `json:"written_count,omitempty"`
-	IndexedCount   int       `json:"indexed_count,omitempty"`
-	Error          string    `json:"error,omitempty"`
-	StartedAt      time.Time `json:"started_at,omitempty"`
-	FinishedAt     time.Time `json:"finished_at,omitempty"`
+	Status                   string    `json:"status"` // pending | running | waiting_user | completed | failed
+	CandidateCount           int       `json:"candidate_count,omitempty"`
+	RejectedCount            int       `json:"rejected_count,omitempty"`
+	WrittenCount             int       `json:"written_count,omitempty"`
+	IndexedCount             int       `json:"indexed_count,omitempty"`
+	ConfirmationCount        int       `json:"confirmation_count,omitempty"`
+	PendingConfirmationCount int       `json:"pending_confirmation_count,omitempty"`
+	ConfirmedCount           int       `json:"confirmed_count,omitempty"`
+	DiscardedCount           int       `json:"discarded_count,omitempty"`
+	Error                    string    `json:"error,omitempty"`
+	StartedAt                time.Time `json:"started_at,omitempty"`
+	FinishedAt               time.Time `json:"finished_at,omitempty"`
 }
 
 type Run struct {
@@ -170,6 +174,13 @@ func (r *Run) setMemoryState(state MemoryRunState) {
 	r.mu.Lock()
 	r.Memory = state
 	r.mu.Unlock()
+}
+
+func (r *Run) updateMemoryState(update func(*MemoryRunState)) MemoryRunState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	update(&r.Memory)
+	return r.Memory
 }
 
 func newRunID() string {

@@ -210,6 +210,11 @@ Resolver 规范化 key 的大小写和文本空白，再按以下规则决策：
 同 subject + attribute，不同 value，且用户原话明确替换
   -> supersede
 
+Provider 建议 replace，但用户原话没有明确替换信号
+  -> 在同一 Session 队列创建轻量确认 Run
+  -> 确认后 supersede
+  -> 拒绝、取消或超时后丢弃新候选
+
 同 subject + attribute，不同 value，明确表示两个值都有效
   -> coexist
 
@@ -218,7 +223,9 @@ Resolver 规范化 key 的大小写和文本空白，再按以下规则决策：
 ```
 
 `replace` 是破坏性动作。模型输出 replace 之后，用户原话还必须包含“搬到”“改成”“现在是”、
-“不再”或“从……到……”等明确替换信号，否则会降级为 unknown。
+“不再”或“从……到……”等明确替换信号，否则不会立即写入。确认 Run 与普通 Agent Run 共用
+Session FIFO，但使用独立的 Run 生命周期和确认超时；等待期间关联记忆发生变化时，候选也会
+作为过期提案被丢弃，避免把旧确认应用到新状态。
 
 ### 3.5 SQLite 原子 Mutation
 

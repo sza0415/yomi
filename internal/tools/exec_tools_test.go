@@ -76,7 +76,7 @@ func TestProbeDocker(t *testing.T) {
 	t.Run("daemon available", func(t *testing.T) {
 		dir := t.TempDir()
 		binary := filepath.Join(dir, "docker")
-		if err := os.WriteFile(binary, []byte("#!/bin/sh\n[ \"$1\" = info ]\n"), 0o755); err != nil {
+		if err := os.WriteFile(binary, []byte("#!/bin/sh\n[ \"$1\" = version ]\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		if err := probeDocker(binary); err != nil {

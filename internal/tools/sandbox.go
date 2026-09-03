@@ -93,14 +93,16 @@ func NewSandbox(cfg SandboxConfig) (*Sandbox, error) {
 
 // probeDocker confirms that the CLI can reach a running Docker daemon. A CLI
 // binary may be installed while Docker Desktop/the daemon is stopped, so a
-// PATH lookup alone is not sufficient to enable execution tools.
+// PATH lookup alone is not sufficient to enable execution tools. `docker info`
+// can block on Docker Desktop while the client/server handshake is healthy;
+// `docker version` performs the same reachability check without that behavior.
 func probeDocker(binary string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dockerProbeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, "info", "--format", "{{.ServerVersion}}")
+	cmd := exec.CommandContext(ctx, binary, "version", "--format", "{{.Server.Version}}")
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
-		return fmt.Errorf("sandbox: Docker daemon is not available (docker info timed out after %s)", dockerProbeTimeout)
+		return fmt.Errorf("sandbox: Docker daemon is not available (docker version timed out after %s)", dockerProbeTimeout)
 	}
 	if err != nil {
 		msg := strings.TrimSpace(string(out))

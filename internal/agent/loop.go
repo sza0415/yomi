@@ -62,12 +62,16 @@ type Loop struct {
 	MemoryEmbedder  memory.EmbeddingProvider
 	MemoryIndexer   memory.Indexer
 	MemoryTimeout   time.Duration
+	// MemoryConfirmationTimeout bounds a lightweight post-run interaction that
+	// asks whether an ambiguous memory replacement should be applied.
+	MemoryConfirmationTimeout time.Duration
 
-	mu       sync.Mutex
-	pending  map[string]*pendingAsk
-	running  map[string]*runHandle
-	queues   map[string][]queuedRun
-	draining map[string]bool
+	mu           sync.Mutex
+	pending      map[string]*pendingAsk
+	running      map[string]*runHandle
+	queues       map[string][]queuedRun
+	draining     map[string]bool
+	lifecycleCtx context.Context
 }
 
 // runHandle 是一次正在运行的 Run 的取消句柄。
@@ -77,8 +81,9 @@ type runHandle struct {
 }
 
 type queuedRun struct {
-	in  bus.InboundMessage
-	run *Run
+	in                 bus.InboundMessage
+	run                *Run
+	memoryConfirmation *memoryConfirmationRequest
 }
 
 // pendingAsk 是一次挂起中的提问：answer 用于把用户回答回传给等待的工具。
@@ -90,6 +95,7 @@ type pendingAsk struct {
 // ctx 取消时退出。
 func (l *Loop) Start(ctx context.Context) {
 	l.mu.Lock()
+	l.lifecycleCtx = ctx
 	if l.pending == nil {
 		l.pending = make(map[string]*pendingAsk)
 	}
@@ -141,20 +147,7 @@ func (l *Loop) run(ctx context.Context) {
 func (l *Loop) enqueue(ctx context.Context, in bus.InboundMessage) {
 	run := NewRun(in.SessionID, l.Budget)
 	item := queuedRun{in: in, run: run}
-
-	l.mu.Lock()
-	if l.queues == nil {
-		l.queues = make(map[string][]queuedRun)
-	}
-	if l.draining == nil {
-		l.draining = make(map[string]bool)
-	}
-	l.queues[in.SessionID] = append(l.queues[in.SessionID], item)
-	start := !l.draining[in.SessionID]
-	if start {
-		l.draining[in.SessionID] = true
-	}
-	l.mu.Unlock()
+	start := l.appendQueuedRun(in.SessionID, item)
 
 	l.record(ctx, run, tracing.EventRunQueued, string(RunQueued), map[string]any{
 		"input": in.Text, "channel_id": in.ChannelID,
@@ -179,8 +172,39 @@ func (l *Loop) drainSession(ctx context.Context, sessionID string) {
 		l.queues[sessionID] = queue[1:]
 		l.mu.Unlock()
 
+		if item.memoryConfirmation != nil {
+			l.handleMemoryConfirmation(ctx, item.in, item.run, item.memoryConfirmation)
+			continue
+		}
 		l.handleRun(ctx, item.in, item.run)
 	}
+}
+
+func (l *Loop) appendQueuedRun(sessionID string, item queuedRun) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.queues == nil {
+		l.queues = make(map[string][]queuedRun)
+	}
+	if l.draining == nil {
+		l.draining = make(map[string]bool)
+	}
+	l.queues[sessionID] = append(l.queues[sessionID], item)
+	if l.draining[sessionID] {
+		return false
+	}
+	l.draining[sessionID] = true
+	return true
+}
+
+func (l *Loop) lifecycleContext(fallback context.Context) context.Context {
+	l.mu.Lock()
+	ctx := l.lifecycleCtx
+	l.mu.Unlock()
+	if ctx != nil {
+		return ctx
+	}
+	return context.WithoutCancel(fallback)
 }
 
 // handle 保留为同步兼容入口，供测试和嵌入调用使用。
@@ -653,6 +677,9 @@ func (l *Loop) Ask(ctx context.Context, question string, options []string) (stri
 	wait := &pendingAsk{answer: make(chan string, 1)}
 
 	l.mu.Lock()
+	if l.pending == nil {
+		l.pending = make(map[string]*pendingAsk)
+	}
 	if _, busy := l.pending[sessionID]; busy {
 		l.mu.Unlock()
 		return "", fmt.Errorf("ask_user_question: session %q already has a pending question", sessionID)

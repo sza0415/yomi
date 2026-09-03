@@ -81,13 +81,12 @@ func ResolveCandidate(existing []Memory, candidate Candidate) Resolution {
 	return Resolution{Action: ResolutionConflict, RelatedIDs: ids, Reason: "different values for the same subject and attribute without a clear replacement"}
 }
 
-// SanitizeChangeHint 防止模型在原始消息没有明确变化信号时静默替换事实。
-// 替换属于破坏性状态转换，因此不确定的变化提示会被降级为冲突。
-func SanitizeChangeHint(candidate Candidate, sourceText string) Candidate {
-	if normalizeChangeHint(candidate.ChangeHint) == ChangeHintReplace && !explicitReplacementSignal(sourceText) {
-		candidate.ChangeHint = ChangeHintUnknown
-	}
-	return candidate
+// NeedsReplacementConfirmation reports whether a provider-proposed replacement
+// lacks direct support in the user's source text. Callers should only ask the
+// user after ResolveCandidate has confirmed that an existing memory would
+// actually be superseded.
+func NeedsReplacementConfirmation(candidate Candidate, sourceText string) bool {
+	return normalizeChangeHint(candidate.ChangeHint) == ChangeHintReplace && !explicitReplacementSignal(sourceText)
 }
 
 func explicitReplacementSignal(text string) bool {

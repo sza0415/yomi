@@ -340,8 +340,14 @@ export SZABOT_SESSION_DIR=./sessionlogs
 export SZABOT_MEMORY_EXTRACTION=off
 # 可选：限制一次记忆提取/索引任务的最长时间
 export SZABOT_MEMORY_TIMEOUT=30s
+# 可选：限制不明确替换等待用户确认的时间，超时后丢弃新候选
+export SZABOT_MEMORY_CONFIRMATION_TIMEOUT=10m
 go run ./cmd/szabot
 ```
+
+当提取模型建议替换已有记忆、但用户原话没有明确变化信号时，Yomi 不会直接写入候选，
+而是在同一 Session 的队列中创建一个轻量确认 Run。确认后旧记录变为 `superseded` 并写入
+新记录；拒绝、取消或超时都会保留旧记录并丢弃新候选。`superseded` 记录不会参与召回。
 
 未设置时默认使用启动工作目录下的 `sessionlogs/`。Qdrant 默认使用本机
 `http://127.0.0.1:6333`，执行 `go run ./cmd/szabot` 时会自动检测、启动或创建容器；

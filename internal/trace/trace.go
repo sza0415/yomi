@@ -50,6 +50,8 @@ const (
 	EventMemoryExtractionFailed   = "memory.extraction.failed"
 	EventMemoryCandidateAccepted  = "memory.candidate.accepted"
 	EventMemoryCandidateRejected  = "memory.candidate.rejected"
+	EventMemoryConfirmationAsked  = "memory.confirmation.asked"
+	EventMemoryConfirmationDone   = "memory.confirmation.done"
 	EventMemoryPolicyApplied      = "memory.policy.applied"
 	EventMemoryWriteCompleted     = "memory.write.completed"
 	EventMemoryWriteFailed        = "memory.write.failed"

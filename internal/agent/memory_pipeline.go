@@ -23,21 +23,34 @@ func (l *Loop) startMemoryExtraction(runCtx context.Context, run *Run, in bus.In
 	}
 	run.setMemoryState(MemoryRunState{Status: "pending"})
 	l.persistSnapshot(run)
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(runCtx), timeout)
+	ctx, cancel := context.WithTimeout(l.lifecycleContext(runCtx), timeout)
 	go func() {
 		defer cancel()
-		run.setMemoryState(MemoryRunState{Status: "running", StartedAt: time.Now().UTC()})
+		startedAt := time.Now().UTC()
+		run.setMemoryState(MemoryRunState{Status: "running", StartedAt: startedAt})
 		l.persistSnapshot(run)
-		outcome := l.extractAndStoreMemory(ctx, run, in, answer)
-		outcome.StartedAt = run.Snapshot().Memory.StartedAt
-		outcome.FinishedAt = time.Now().UTC()
+		outcome, confirmations := l.extractAndStoreMemory(ctx, run, in, answer)
+		outcome.StartedAt = startedAt
+		if outcome.PendingConfirmationCount == 0 {
+			outcome.FinishedAt = time.Now().UTC()
+		}
 		run.setMemoryState(outcome)
 		l.persistSnapshot(run)
+		for _, confirmation := range confirmations {
+			l.enqueueMemoryConfirmation(ctx, confirmation)
+		}
 	}()
 }
 
-func (l *Loop) extractAndStoreMemory(ctx context.Context, run *Run, in bus.InboundMessage, answer string) (outcome MemoryRunState) {
+func (l *Loop) extractAndStoreMemory(ctx context.Context, run *Run, in bus.InboundMessage, answer string) (outcome MemoryRunState, confirmations []*memoryConfirmationRequest) {
 	outcome.Status = "completed"
+	defer func() {
+		outcome.ConfirmationCount = len(confirmations)
+		outcome.PendingConfirmationCount = len(confirmations)
+		if len(confirmations) > 0 {
+			outcome.Status = "waiting_user"
+		}
+	}()
 	started := time.Now()
 	traceData := map[string]any{"user_id_hash": hashScope(in.UserID), "source_session_id": in.SessionID}
 	l.record(ctx, run, tracing.EventMemoryExtractionStarted, "started", traceData)
@@ -49,7 +62,7 @@ func (l *Loop) extractAndStoreMemory(ctx context.Context, run *Run, in bus.Inbou
 		outcome.Status = "failed"
 		outcome.Error = err.Error()
 		l.recordDuration(ctx, run, tracing.EventMemoryExtractionFailed, "failed", time.Since(started), map[string]any{"error": err.Error(), "user_id_hash": hashScope(in.UserID)})
-		return outcome
+		return outcome, confirmations
 	}
 	outcome.CandidateCount = len(candidates)
 	l.recordDuration(ctx, run, tracing.EventMemoryExtractionFinished, "completed", time.Since(started), map[string]any{"candidate_count": len(candidates), "user_id_hash": hashScope(in.UserID)})
@@ -65,78 +78,108 @@ func (l *Loop) extractAndStoreMemory(ctx context.Context, run *Run, in bus.Inbou
 	accepted := make([]memory.Memory, 0, len(policyResult.Accepted))
 	retiredIndexIDs := make([]string, 0)
 	for _, candidate := range policyResult.Accepted {
-		candidate = memory.SanitizeChangeHint(candidate, in.Text)
-		var existing []memory.Memory
-		var searchErr error
-		if relatedStore, ok := l.Memory.(memory.RelatedStore); ok && strings.TrimSpace(candidate.Attribute) != "" {
-			existing, searchErr = relatedStore.FindRelated(ctx, in.UserID, candidate.Kind, candidate.Subject, candidate.Attribute)
-		} else {
-			// 对于没有属性键的旧版候选记忆，继续使用原有的文本检索路径，
-			// 并且只根据规范化后的内容进行去重。
-			existing, searchErr = l.Memory.Search(ctx, memory.Query{UserID: in.UserID, Text: candidate.Content, Limit: 8})
+		existing, searchErr := l.findExistingMemories(ctx, in.UserID, candidate)
+		if searchErr != nil {
+			outcome.Status = "failed"
+			outcome.Error = searchErr.Error()
+			l.record(ctx, run, tracing.EventMemoryCandidateRejected, "lookup_failed", map[string]any{
+				"reason": searchErr.Error(), "kind": candidate.Kind, "user_id_hash": hashScope(in.UserID),
+			})
+			continue
 		}
-		resolution := mem4/7ory.ResolveCandidate(existing, candidate)
-		mutationStore, canMutate := l.Memory.(memory.MutationStore)
-		if !canMutate && resolution.Action != memory.ResolutionDuplicate && resolution.Action != memory.ResolutionCoexist {
-			// 自定义的旧版 Store 无法以原子方式转换关联记录的状态；
-			// 此时保留原有的仅追加行为，不能假设冲突已经得到解决。
-			resolution = memory.Resolution{Action: memory.ResolutionCoexist, Reason: "store does not support atomic memory mutations"}
-		}
-		if searchErr == nil && resolution.Action == memory.ResolutionDuplicate {
+		resolution := memory.ResolveCandidate(existing, candidate)
+		if resolution.Action == memory.ResolutionDuplicate {
 			l.record(ctx, run, tracing.EventMemoryCandidateRejected, "duplicate", map[string]any{"reason": "duplicate", "user_id_hash": hashScope(in.UserID)})
 			continue
 		}
-		item := memory.Memory{
-			ID: memory.NewID("mem"), UserID: in.UserID, Kind: candidate.Kind,
-			Subject: candidate.Subject, Attribute: candidate.Attribute, Value: candidate.Value,
-			Content: candidate.Content, Status: memory.StatusActive,
-			SourceRunID: run.ID, SourceSessionID: in.SessionID, Evidence: candidate.Evidence,
-			Confidence: candidate.Confidence, Importance: candidate.Importance,
-			ValidFrom: candidate.ValidFrom, ExpiresAt: candidate.ExpiresAt,
-			IndexStatus: "pending", CreatedAt: time.Now().UTC(),
+		if resolution.Action == memory.ResolutionSupersede && memory.NeedsReplacementConfirmation(candidate, in.Text) {
+			confirmations = append(confirmations, &memoryConfirmationRequest{
+				SourceRun: run, Inbound: in, Candidate: candidate,
+			})
+			continue
 		}
-		if item.ValidFrom.IsZero() {
-			item.ValidFrom = time.Now().UTC()
-		}
-		mutation := memory.Mutation{Memory: item, Reason: resolution.Reason}
-		switch resolution.Action {
-		case memory.ResolutionSupersede:
-			mutation.SupersedeIDs = resolution.RelatedIDs
-			if len(resolution.RelatedIDs) > 0 {
-				item.SupersedesID = resolution.RelatedIDs[0]
-				mutation.Memory.SupersedesID = item.SupersedesID
-			}
-		case memory.ResolutionConflict:
-			mutation.ConflictIDs = resolution.RelatedIDs
-			item.Status = memory.StatusConflict
-			mutation.Memory.Status = item.Status
-		}
-		var writeErr error
-		if canMutate {
-			writeErr = mutationStore.ApplyMutation(ctx, mutation)
-		} else {
-			writeErr = l.Memory.Upsert(ctx, item)
-		}
+		item, retiredIDs, writeErr := l.storeMemoryCandidate(ctx, run, in, candidate, resolution)
 		if writeErr != nil {
 			outcome.Status = "failed"
 			outcome.Error = writeErr.Error()
-			l.record(ctx, run, tracing.EventMemoryWriteFailed, "failed", map[string]any{"error": writeErr.Error(), "kind": item.Kind, "user_id_hash": hashScope(in.UserID)})
 			continue
 		}
 		accepted = append(accepted, item)
-		if resolution.Action == memory.ResolutionSupersede || resolution.Action == memory.ResolutionConflict {
-			retiredIndexIDs = append(retiredIndexIDs, resolution.RelatedIDs...)
-		}
+		retiredIndexIDs = append(retiredIndexIDs, retiredIDs...)
 		outcome.WrittenCount++
-		l.record(ctx, run, tracing.EventMemoryCandidateAccepted, "accepted", map[string]any{
-			"memory_id": item.ID, "kind": item.Kind, "action": resolution.Action,
-			"related_memory_ids": resolution.RelatedIDs, "reason": resolution.Reason,
-			"user_id_hash": hashScope(in.UserID),
-		})
-		l.record(ctx, run, tracing.EventMemoryWriteCompleted, "completed", map[string]any{"memory_id": item.ID, "kind": item.Kind, "user_id_hash": hashScope(in.UserID)})
 	}
+	indexed, indexErr := l.indexMemoryItems(ctx, run, in.UserID, accepted, retiredIndexIDs)
+	outcome.IndexedCount = indexed
+	if indexErr != nil {
+		outcome.Status = "failed"
+		outcome.Error = indexErr.Error()
+	}
+	return outcome, confirmations
+}
+
+func (l *Loop) findExistingMemories(ctx context.Context, userID string, candidate memory.Candidate) ([]memory.Memory, error) {
+	if relatedStore, ok := l.Memory.(memory.RelatedStore); ok && strings.TrimSpace(candidate.Attribute) != "" {
+		return relatedStore.FindRelated(ctx, userID, candidate.Kind, candidate.Subject, candidate.Attribute)
+	}
+	// 旧版非结构化候选继续通过规范化正文查重。
+	return l.Memory.Search(ctx, memory.Query{UserID: userID, Text: candidate.Content, Limit: 8})
+}
+
+func (l *Loop) storeMemoryCandidate(ctx context.Context, run *Run, in bus.InboundMessage, candidate memory.Candidate, resolution memory.Resolution) (memory.Memory, []string, error) {
+	mutationStore, canMutate := l.Memory.(memory.MutationStore)
+	if !canMutate && resolution.Action != memory.ResolutionDuplicate && resolution.Action != memory.ResolutionCoexist {
+		resolution = memory.Resolution{Action: memory.ResolutionCoexist, Reason: "store does not support atomic memory mutations"}
+	}
+	item := memory.Memory{
+		ID: memory.NewID("mem"), UserID: in.UserID, Kind: candidate.Kind,
+		Subject: candidate.Subject, Attribute: candidate.Attribute, Value: candidate.Value,
+		Content: candidate.Content, Status: memory.StatusActive,
+		SourceRunID: run.ID, SourceSessionID: in.SessionID, Evidence: candidate.Evidence,
+		Confidence: candidate.Confidence, Importance: candidate.Importance,
+		ValidFrom: candidate.ValidFrom, ExpiresAt: candidate.ExpiresAt,
+		IndexStatus: "pending", CreatedAt: time.Now().UTC(),
+	}
+	if item.ValidFrom.IsZero() {
+		item.ValidFrom = time.Now().UTC()
+	}
+	mutation := memory.Mutation{Memory: item, Reason: resolution.Reason}
+	retiredIDs := make([]string, 0)
+	switch resolution.Action {
+	case memory.ResolutionSupersede:
+		mutation.SupersedeIDs = resolution.RelatedIDs
+		retiredIDs = append(retiredIDs, resolution.RelatedIDs...)
+		if len(resolution.RelatedIDs) > 0 {
+			item.SupersedesID = resolution.RelatedIDs[0]
+			mutation.Memory.SupersedesID = item.SupersedesID
+		}
+	case memory.ResolutionConflict:
+		mutation.ConflictIDs = resolution.RelatedIDs
+		retiredIDs = append(retiredIDs, resolution.RelatedIDs...)
+		item.Status = memory.StatusConflict
+		mutation.Memory.Status = item.Status
+	}
+	var err error
+	if canMutate {
+		err = mutationStore.ApplyMutation(ctx, mutation)
+	} else {
+		err = l.Memory.Upsert(ctx, item)
+	}
+	if err != nil {
+		l.record(ctx, run, tracing.EventMemoryWriteFailed, "failed", map[string]any{"error": err.Error(), "kind": item.Kind, "user_id_hash": hashScope(in.UserID)})
+		return memory.Memory{}, nil, err
+	}
+	l.record(ctx, run, tracing.EventMemoryCandidateAccepted, "accepted", map[string]any{
+		"memory_id": item.ID, "kind": item.Kind, "action": resolution.Action,
+		"related_memory_ids": resolution.RelatedIDs, "reason": resolution.Reason,
+		"user_id_hash": hashScope(in.UserID),
+	})
+	l.record(ctx, run, tracing.EventMemoryWriteCompleted, "completed", map[string]any{"memory_id": item.ID, "kind": item.Kind, "user_id_hash": hashScope(in.UserID)})
+	return item, retiredIDs, nil
+}
+
+func (l *Loop) indexMemoryItems(ctx context.Context, run *Run, userID string, accepted []memory.Memory, retiredIndexIDs []string) (int, error) {
 	if len(accepted) == 0 || l.MemoryEmbedder == nil || l.MemoryIndexer == nil {
-		return outcome
+		return 0, nil
 	}
 	texts := make([]string, len(accepted))
 	for i := range accepted {
@@ -144,18 +187,15 @@ func (l *Loop) extractAndStoreMemory(ctx context.Context, run *Run, in bus.Inbou
 	}
 	vectors, err := l.MemoryEmbedder.Embed(ctx, texts)
 	if err != nil {
-		outcome.Status = "failed"
-		outcome.Error = err.Error()
 		l.markMemoryIndexState(ctx, accepted, "failed", l.MemoryEmbedder.Model(), l.MemoryEmbedder.Version(), 0)
-		l.record(ctx, run, tracing.EventMemoryIndexFailed, "failed", map[string]any{"error": err.Error(), "count": len(accepted), "user_id_hash": hashScope(in.UserID)})
-		return outcome
+		l.record(ctx, run, tracing.EventMemoryIndexFailed, "failed", map[string]any{"error": err.Error(), "count": len(accepted), "user_id_hash": hashScope(userID)})
+		return 0, err
 	}
 	if len(vectors) != len(accepted) {
-		outcome.Status = "failed"
-		outcome.Error = fmt.Sprintf("embedding count %d does not match memory count %d", len(vectors), len(accepted))
+		err = fmt.Errorf("embedding count %d does not match memory count %d", len(vectors), len(accepted))
 		l.markMemoryIndexState(ctx, accepted, "failed", l.MemoryEmbedder.Model(), l.MemoryEmbedder.Version(), 0)
-		l.record(ctx, run, tracing.EventMemoryIndexFailed, "failed", map[string]any{"error": fmt.Sprintf("embedding count %d does not match memory count %d", len(vectors), len(accepted)), "user_id_hash": hashScope(in.UserID)})
-		return outcome
+		l.record(ctx, run, tracing.EventMemoryIndexFailed, "failed", map[string]any{"error": err.Error(), "user_id_hash": hashScope(userID)})
+		return 0, err
 	}
 	dimension := 0
 	if len(vectors) > 0 {
@@ -166,24 +206,19 @@ func (l *Loop) extractAndStoreMemory(ctx context.Context, run *Run, in bus.Inbou
 		records = append(records, memory.VectorRecord{ID: item.ID, Vector: vectors[i], Payload: map[string]any{"memory_id": item.ID, "user_id": item.UserID, "kind": item.Kind, "status": item.Status, "source_run_id": item.SourceRunID}})
 	}
 	if err := l.MemoryIndexer.Upsert(ctx, records); err != nil {
-		outcome.Status = "failed"
-		outcome.Error = err.Error()
 		l.markMemoryIndexState(ctx, accepted, "failed", l.MemoryEmbedder.Model(), l.MemoryEmbedder.Version(), dimension)
-		l.record(ctx, run, tracing.EventMemoryIndexFailed, "failed", map[string]any{"error": err.Error(), "count": len(records), "user_id_hash": hashScope(in.UserID)})
-		return outcome
+		l.record(ctx, run, tracing.EventMemoryIndexFailed, "failed", map[string]any{"error": err.Error(), "count": len(records), "user_id_hash": hashScope(userID)})
+		return 0, err
 	}
 	if len(retiredIndexIDs) > 0 {
 		if err := l.MemoryIndexer.Delete(ctx, retiredIndexIDs); err != nil {
-			outcome.Status = "failed"
-			outcome.Error = err.Error()
-			l.record(ctx, run, tracing.EventMemoryIndexFailed, "failed", map[string]any{"error": err.Error(), "count": len(retiredIndexIDs), "user_id_hash": hashScope(in.UserID)})
-			return outcome
+			l.record(ctx, run, tracing.EventMemoryIndexFailed, "failed", map[string]any{"error": err.Error(), "count": len(retiredIndexIDs), "user_id_hash": hashScope(userID)})
+			return 0, err
 		}
 	}
-	outcome.IndexedCount = len(records)
 	l.markMemoryIndexState(ctx, accepted, "indexed", l.MemoryEmbedder.Model(), l.MemoryEmbedder.Version(), dimension)
-	l.record(ctx, run, tracing.EventMemoryIndexCompleted, "completed", map[string]any{"count": len(records), "model": l.MemoryEmbedder.Model(), "version": l.MemoryEmbedder.Version(), "user_id_hash": hashScope(in.UserID)})
-	return outcome
+	l.record(ctx, run, tracing.EventMemoryIndexCompleted, "completed", map[string]any{"count": len(records), "model": l.MemoryEmbedder.Model(), "version": l.MemoryEmbedder.Version(), "user_id_hash": hashScope(userID)})
+	return len(records), nil
 }
 
 func (l *Loop) markMemoryIndexState(ctx context.Context, items []memory.Memory, status, model, version string, dimension int) {

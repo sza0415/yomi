@@ -125,6 +125,7 @@ function finishCurrentAssistant(): void {
     message.streaming = false;
     for (const activity of message.activities) {
       if (activity.status === "running") activity.status = "completed";
+      if (activity.status === "waiting") activity.status = "failed";
     }
   }
   currentAssistantID = "";
