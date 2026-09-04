@@ -9,13 +9,16 @@
 
 ```text
 Inbound(UserID, SessionID, Text)
-  -> ContextManager 按 UserID 检索 SQLite FTS5
-  -> 将命中的记忆作为 reference-only 上下文注入模型
+  -> ContextManager 按 UserID 注入不含具体值的 L0 目录
+  -> 主模型按需调用 memory_browse / memory_search / memory_get
   -> Runner 生成最终回答
   -> 成功后保存 Conversation
-  -> 后台 LLMExtractor 提取候选
+  -> 后台 MemoryCurator 用同一组只读工具检查已有记忆
+  -> 输出 add / replace / coexist / no_op / needs_confirmation proposal
   -> MemoryPolicy 过滤
-  -> SQLite 写入 memories + memory_fts + memory_events
+  -> 代码校验 UserID、目标状态和目标版本
+  -> 不明确替换进入持久化 Human in the Loop
+  -> SQLite 原子写入 memories + memory_fts + memory_events + memory_proposals
   -> 可选生成 Embedding 并写入 Qdrant
 ```
 
@@ -26,8 +29,11 @@ Inbound(UserID, SessionID, Text)
 - 过期和 deleted 记录的默认过滤；
 - 敏感信息、低置信度、低重要性和过长内容的拒绝；
 - 完全相同 active 记忆的去重；
-- 结构化候选的 duplicate、supersede、conflict、coexist 初版解析；
-- 对破坏性 `replace` 提示增加用户原话中的明确替换信号校验；
+- kind -> subject -> attribute -> records 的层级浏览和按需披露；
+- 跨 attribute/subject 标签漂移的语义目标选择和旧路径复用；
+- add、replace、coexist、no_op、needs_confirmation proposal；
+- 对破坏性 `replace` 增加用户原话中的明确替换信号校验；
+- 待确认 proposal 的 SQLite 持久化、目标版本校验和重启恢复；
 - supersede/conflict 时的 SQLite 原子状态迁移和管线级旧向量清理；
 - SQLite 事务写入、FTS5 关键词检索和变更事件记录；
 - Run 完成后的异步提取和 Trace/Snapshot 可观测性；
@@ -35,29 +41,30 @@ Inbound(UserID, SessionID, Text)
 
 当前尚未解决：
 
-- 自由文本候选的稳定属性抽取和高质量冲突判断；
+- subject/attribute 别名的离线规范化和系统性质量评测；
 - 直接删除 API 与所有索引后端的统一联动；
-- 混合检索的重排序和 Profile Card/Episode 分层召回；
+- Profile Card/Episode 的独立聚合视图；
 - 从 memory_events 重建 memories 当前状态；
 - 用户侧 list、correct、forget、forget-all 入口；
-- 可恢复的后台提取任务队列。
+- 普通异步提取任务（非待确认 proposal）的重启恢复。
 
 ## 2. 读流程：本轮如何使用记忆
 
 1. `Loop.handleRun` 收到带 `UserID`、`SessionID` 和文本的入站消息。
 2. `ContextManager.BuildForUser` 加载当前 Session 的 Conversation 和 rolling summary。
-3. 如果存在 `UserID` 和 MemoryStore，用当前 user 文本查询最多 8 条记忆。
-4. SQLite `Search` 先用 FTS5/BM25，未命中时用 `content`/`subject` 的 `LIKE` 回退。
-5. 查询默认只返回当前用户的 `active`、未过期记录；`conflict` 只有显式设置 `IncludeConflicts` 才会返回。
-6. 命中结果被包装为 `<user_memory>` system message，明确标记为参考资料而不是指令。
-7. 记忆检索失败不会阻断主对话，只记录 Trace 事件并继续运行。
+3. 如果存在 `UserID` 和支持层级浏览的 MemoryStore，加载 `kind/subject/attribute/count` 目录。
+4. 目录被包装为 `<user_memory_catalog>` system message，不含 value、content 和 evidence。
+5. 模型按需使用 `memory_browse` 逐层读取，层级不明确时使用 `memory_search`。
+6. `memory_search` 先用 FTS5/BM25 和可选 Qdrant 召回，再回查 SQLite 用户、状态和有效期。
+7. 三个工具的 `UserID` 都由宿主 Context 绑定，模型不能指定其他用户。
+8. 目录读取失败不会阻断主对话，只记录 Trace 事件并继续运行。
 
 实际上下文顺序是：
 
 ```text
 system prompt
   -> conversation summary
-  -> user memory
+  -> user memory catalog
   -> 未被 summary 覆盖的历史
   -> 当前 user 消息
 ```
@@ -67,12 +74,14 @@ system prompt
 只有 Runner 成功返回、Conversation 追加完成后，Loop 才启动异步记忆提取。
 提取使用独立的 30 秒默认超时，不阻塞用户已经看到的最终答案。
 
-### 3.1 提取
+### 3.1 Curator
 
-`LLMExtractor` 只把本轮 user 文本和最终 assistant 正文交给模型，要求返回 JSON 候选，字段包括：
+`ToolMemoryCurator` 把本轮 user 文本、最终 assistant 正文和 L0 catalog 交给只读 Runner。它按
+`kind -> subject -> attribute -> records` 检查相关旧记忆，最终返回 proposal：
 
 ```text
-kind, subject, content, evidence,
+operation, target_ids,
+kind, subject, attribute, value, content, evidence,
 confidence, importance, valid_from, expires_at
 ```
 
@@ -88,29 +97,32 @@ importance >= 0.20
 content <= 1000 个 Unicode 字符
 ```
 
-同时拒绝空内容、非法 kind 和敏感信息。Policy 的安全检查只在异步提取管线中执行；直接调用 `MemoryStore.Upsert` 可以绕过它。
+同时拒绝空内容、非法 kind/operation/目标约束，以及 content、evidence 或 value 中的敏感信息。
+Policy 的安全检查只在异步提取管线中执行；直接调用 `MemoryStore.Upsert` 可以绕过它。
 
-### 3.3 当前去重和冲突逻辑
+### 3.3 Proposal 和确认逻辑
 
-对带有 `attribute` 的结构化候选，管线会先找同一用户、kind、subject 和 attribute 的 active/conflict 记录，再按规范化后的值判断：
-
-```text
-同一 subject + attribute + value -> duplicate
-不同 value + change_hint=replace -> supersede
-不同 value + change_hint=coexist -> coexist
-不同 value + change_hint=unknown -> conflict
-```
-
-规范化会去除首尾和重复空白，并对 key 做小写化。旧的无 `attribute` 候选仍走文本检索，只按规范化正文去重，不能可靠判断冲突。
-
-因此：
+subject/attribute 是模型生成的导航标签，代码不再假定字符串不同就能共存。curator 通过工具返回的
+`target_ids` 表达语义关系，代码随后在宿主绑定的用户作用域重新加载目标：
 
 ```text
-旧：用户住在北京
-新：用户住在上海
+add                 无目标，新增
+no_op               已存在同义记忆，不写入
+replace              明确纠正时废弃目标并写入候选
+coexist              新旧都有效
+needs_confirmation   等待用户确认
 ```
 
-如果提取器给出 `attribute=home_city` 且明确 `change_hint=replace`，并且用户原话包含“搬到/改成/现在是”等明确替换信号，旧记录会变成 `superseded`；如果模型给了 replace 但原话没有替换信号，会被降级为 unknown，双方进入 `conflict`，默认搜索不会注入。
+例如：
+
+```text
+旧：fact/self/home_city = 云南昭通
+新：fact/self/home_province = 四川
+```
+
+curator 可以识别为同一语义槽位并引用旧 ID；新记录会沿用 `home_city` 路径。“其实”“更正”
+“搬到”“改成”等明确纠正信号允许直接替换；没有明确信号时 proposal 持久化并创建同 Session
+轻量确认 Run。确认时再次校验目标 ID、版本和过期时间，拒绝、超时或 stale 都不会改动旧记忆。
 
 ## 4. SQLite 写入和索引
 

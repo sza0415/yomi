@@ -9,6 +9,8 @@ import "context"
 // sessionKey 是 ctx 里存放 SessionID 的私有 key。
 type sessionKey struct{}
 
+type userKey struct{}
+
 // WithSession 把 SessionID 放进 ctx。由 Runner 在执行工具前调用。
 func WithSession(ctx context.Context, sessionID string) context.Context {
 	return context.WithValue(ctx, sessionKey{}, sessionID)
@@ -18,6 +20,19 @@ func WithSession(ctx context.Context, sessionID string) context.Context {
 func sessionFrom(ctx context.Context) string {
 	if s, ok := ctx.Value(sessionKey{}).(string); ok {
 		return s
+	}
+	return ""
+}
+
+// WithUser binds the authenticated memory scope to tool execution. Memory
+// tools intentionally do not accept user_id in model-generated arguments.
+func WithUser(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, userKey{}, userID)
+}
+
+func userFrom(ctx context.Context) string {
+	if userID, ok := ctx.Value(userKey{}).(string); ok {
+		return userID
 	}
 	return ""
 }

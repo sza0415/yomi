@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,6 +19,35 @@ func (p *summaryProvider) Chat(_ context.Context, req providers.ChatRequest) (pr
 		return providers.ChatResponse{Content: "用户曾讨论项目约束；保留最近任务。"}, nil
 	}
 	return providers.ChatResponse{Content: "ok"}, nil
+}
+
+func TestContextManagerInjectsCatalogWithoutMemoryValues(t *testing.T) {
+	store, err := memory.NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Upsert(context.Background(), memory.Memory{
+		ID: "mem-home", UserID: "alice", Kind: memory.KindFact, Subject: "self",
+		Attribute: "home_city", Value: "云南昭通", Content: "用户家在云南昭通", Status: memory.StatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := &ContextManager{Memory: store}
+	got, err := m.BuildForUser(context.Background(), "alice", "session-1", "SYS", providers.Message{Role: providers.RoleUser, Content: "我的家在哪里？"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MemoryCatalogCount != 1 || got.MemoryCount != 0 || len(got.Messages) != 3 {
+		t.Fatalf("catalog context = %#v catalog=%d memories=%d", got.Messages, got.MemoryCatalogCount, got.MemoryCount)
+	}
+	memoryContext := got.Messages[1].Content
+	if !strings.Contains(memoryContext, `"attribute":"home_city"`) || !strings.Contains(memoryContext, "memory_browse") {
+		t.Fatalf("catalog context = %q", memoryContext)
+	}
+	if strings.Contains(memoryContext, "云南") || strings.Contains(memoryContext, "用户家在") {
+		t.Fatalf("catalog leaked a memory value: %q", memoryContext)
+	}
 }
 
 func TestContextManagerCompactsAndPersistsSummary(t *testing.T) {

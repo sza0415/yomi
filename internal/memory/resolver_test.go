@@ -17,7 +17,7 @@ func TestResolveCandidateUsesStructuredSlot(t *testing.T) {
 		want      ResolutionAction
 	}{
 		{name: "duplicate", candidate: Candidate{Kind: KindFact, Subject: "SELF", Attribute: "home_city", Value: "北京", Content: "用户目前住在北京"}, want: ResolutionDuplicate},
-		{name: "replace", candidate: Candidate{Kind: KindFact, Subject: "self", Attribute: "home_city", Value: "上海", Content: "用户已搬到上海", ChangeHint: ChangeHintReplace}, want: ResolutionSupersede},
+		{name: "replace", candidate: Candidate{Kind: KindFact, Subject: "self", Attribute: "home_city", Value: "上海", Content: "用户已搬到上海", ChangeHint: ChangeHintReplace}, want: ResolutionReplace},
 		{name: "conflict", candidate: Candidate{Kind: KindFact, Subject: "self", Attribute: "home_city", Value: "上海", Content: "用户住在上海"}, want: ResolutionConflict},
 		{name: "coexist", candidate: Candidate{Kind: KindFact, Subject: "self", Attribute: "home_city", Value: "上海", Content: "用户也在上海居住", ChangeHint: ChangeHintCoexist}, want: ResolutionCoexist},
 	}
@@ -40,19 +40,28 @@ func TestResolveCandidateDoesNotConflictUnstructuredMemories(t *testing.T) {
 	}
 }
 
-func TestSanitizeChangeHintRequiresExplicitReplacementSignal(t *testing.T) {
+func TestNeedsReplacementConfirmationRequiresExplicitReplacementSignal(t *testing.T) {
 	candidate := Candidate{ChangeHint: ChangeHintReplace}
-	got := SanitizeChangeHint(candidate, "我在上海有一套房")
-	if got.ChangeHint != ChangeHintUnknown {
-		t.Fatalf("change hint = %q, want unknown", got.ChangeHint)
+	if !NeedsReplacementConfirmation(candidate, "我在上海有一套房") {
+		t.Fatal("replacement without an explicit signal should require confirmation")
 	}
-	got = SanitizeChangeHint(candidate, "我已经搬到上海了")
-	if got.ChangeHint != ChangeHintReplace {
-		t.Fatalf("change hint = %q, want replace", got.ChangeHint)
+	if NeedsReplacementConfirmation(candidate, "我已经搬到上海了") {
+		t.Fatal("explicit replacement signal should not require confirmation")
 	}
-	got = SanitizeChangeHint(candidate, "我从小喜欢北京")
-	if got.ChangeHint != ChangeHintUnknown {
-		t.Fatalf("change hint = %q, want unknown for unrelated 从", got.ChangeHint)
+	if NeedsReplacementConfirmation(candidate, "我的家其实在四川") {
+		t.Fatal("其实 should count as an explicit correction signal")
+	}
+	if !NeedsReplacementConfirmation(candidate, "我从小喜欢北京") {
+		t.Fatal("unrelated 从 should not count as an explicit replacement signal")
+	}
+	if !NeedsReplacementConfirmation(candidate, "我不是在问天气") {
+		t.Fatal("standalone negation should not count as an explicit replacement signal")
+	}
+	if NeedsReplacementConfirmation(candidate, "不是云南，而是四川") {
+		t.Fatal("paired correction should not require confirmation")
+	}
+	if NeedsReplacementConfirmation(Candidate{ChangeHint: ChangeHintUnknown}, "我住在上海") {
+		t.Fatal("unknown change hint should not request replacement confirmation")
 	}
 }
 

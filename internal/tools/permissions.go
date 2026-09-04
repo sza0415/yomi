@@ -102,7 +102,7 @@ func (g *PolicyGate) allowAlways(tool string) {
 
 func isReadOnlyTool(name string) bool {
 	switch name {
-	case "read_file", "list_dir", "glob", "grep":
+	case "read_file", "list_dir", "glob", "grep", "memory_browse", "memory_search", "memory_get":
 		return true
 	default:
 		return false
