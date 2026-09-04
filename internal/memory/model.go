@@ -23,6 +23,14 @@ const (
 	ChangeHintReplace = "replace"
 	ChangeHintCoexist = "coexist"
 	ChangeHintUnknown = "unknown"
+
+	ProposalStatusPending   = "pending"
+	ProposalStatusApplied   = "applied"
+	ProposalStatusRejected  = "rejected"
+	ProposalStatusTimedOut  = "timed_out"
+	ProposalStatusCancelled = "cancelled"
+	ProposalStatusStale     = "stale"
+	ProposalStatusFailed    = "failed"
 )
 
 // Memory 是按用户隔离的权威记录。搜索索引由该记录派生，不能被当作事实来源。
@@ -61,6 +69,48 @@ type Query struct {
 	Kinds []string
 }
 
+type BrowseLevel string
+
+const (
+	BrowseKinds      BrowseLevel = "kinds"
+	BrowseSubjects   BrowseLevel = "subjects"
+	BrowseAttributes BrowseLevel = "attributes"
+	BrowseMemories   BrowseLevel = "memories"
+)
+
+// BrowseQuery describes one step through the logical
+// kind -> subject -> attribute -> memory hierarchy. UserID is supplied by the
+// host, never by model-generated tool arguments.
+type BrowseQuery struct {
+	UserID           string
+	Level            BrowseLevel
+	Kind             string
+	Subject          string
+	Attribute        string
+	IncludeConflicts bool
+	Limit            int
+}
+
+type BrowseEntry struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+type BrowseResult struct {
+	Level    BrowseLevel   `json:"level"`
+	Entries  []BrowseEntry `json:"entries,omitempty"`
+	Memories []Memory      `json:"memories,omitempty"`
+}
+
+// CatalogEntry is the compact L0 directory injected into model context. It
+// deliberately carries no memory values or evidence.
+type CatalogEntry struct {
+	Kind      string `json:"kind"`
+	Subject   string `json:"subject"`
+	Attribute string `json:"attribute"`
+	Count     int    `json:"count"`
+}
+
 type Event struct {
 	EventID   string    `json:"event_id"`
 	MemoryID  string    `json:"memory_id"`
@@ -78,6 +128,7 @@ type Mutation struct {
 	SupersedeIDs []string
 	ConflictIDs  []string
 	Reason       string
+	ProposalID   string
 }
 
 type Store interface {
@@ -101,9 +152,22 @@ type RelatedStore interface {
 	FindRelated(ctx context.Context, userID, kind, subject, attribute string) ([]Memory, error)
 }
 
+// Browser exposes bounded, user-scoped hierarchy navigation without exposing
+// SQL or allowing the caller to choose a different user's scope.
+type Browser interface {
+	Browse(ctx context.Context, query BrowseQuery) (BrowseResult, error)
+	Catalog(ctx context.Context, userID string, includeConflicts bool) ([]CatalogEntry, error)
+}
+
 // MutationStore 是可选扩展，可以原子地应用候选记忆及其关联状态转换。
 type MutationStore interface {
 	ApplyMutation(ctx context.Context, mutation Mutation) error
+}
+
+type ProposalStore interface {
+	CreateProposal(ctx context.Context, proposal ProposalRecord) (ProposalRecord, error)
+	CompleteProposal(ctx context.Context, userID, proposalID, status string) error
+	ListPendingProposals(ctx context.Context) ([]ProposalRecord, error)
 }
 
 type SearchStats struct {

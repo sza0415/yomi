@@ -48,6 +48,8 @@ const (
 	EventMemoryExtractionStarted  = "memory.extraction.started"
 	EventMemoryExtractionFinished = "memory.extraction.finished"
 	EventMemoryExtractionFailed   = "memory.extraction.failed"
+	EventMemoryProposalResolved   = "memory.proposal.resolved"
+	EventMemoryProposalPersisted  = "memory.proposal.persisted"
 	EventMemoryCandidateAccepted  = "memory.candidate.accepted"
 	EventMemoryCandidateRejected  = "memory.candidate.rejected"
 	EventMemoryConfirmationAsked  = "memory.confirmation.asked"

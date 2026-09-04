@@ -38,6 +38,46 @@ type Extractor interface {
 	Extract(ctx context.Context, input ExtractionInput) ([]Candidate, error)
 }
 
+type ProposalOperation string
+
+const (
+	ProposalAdd               ProposalOperation = "add"
+	ProposalReplace           ProposalOperation = "replace"
+	ProposalCoexist           ProposalOperation = "coexist"
+	ProposalNoop              ProposalOperation = "no_op"
+	ProposalNeedsConfirmation ProposalOperation = "needs_confirmation"
+)
+
+// Proposal is a model-generated mutation request. TargetIDs are untrusted and
+// must be reloaded within the host-bound user scope before any write occurs.
+type Proposal struct {
+	Operation ProposalOperation `json:"operation"`
+	Candidate Candidate         `json:"candidate"`
+	TargetIDs []string          `json:"target_ids,omitempty"`
+	Reason    string            `json:"reason,omitempty"`
+}
+
+type ProposalRecord struct {
+	ID              string               `json:"id"`
+	UserID          string               `json:"user_id"`
+	SourceSessionID string               `json:"source_session_id"`
+	SourceRunID     string               `json:"source_run_id"`
+	ChannelID       string               `json:"channel_id"`
+	Operation       ProposalOperation    `json:"operation"`
+	Candidate       Candidate            `json:"candidate"`
+	TargetIDs       []string             `json:"target_ids"`
+	TargetVersions  map[string]time.Time `json:"target_versions,omitempty"`
+	Reason          string               `json:"reason,omitempty"`
+	Status          string               `json:"status"`
+	CreatedAt       time.Time            `json:"created_at"`
+	ExpiresAt       time.Time            `json:"expires_at"`
+	DecidedAt       time.Time            `json:"decided_at,omitempty"`
+}
+
+type Curator interface {
+	Curate(ctx context.Context, input ExtractionInput) ([]Proposal, error)
+}
+
 // LLMExtractor 请求已配置的 Provider 生成一份仅包含 JSON 的精简记忆提案。
 // 该提案仍属于不可信输入，写入前必须通过 Policy 检查。
 type LLMExtractor struct {

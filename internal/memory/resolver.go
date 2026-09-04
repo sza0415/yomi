@@ -8,10 +8,10 @@ import (
 type ResolutionAction string
 
 const (
-	ResolutionDuplicate ResolutionAction = "duplicate"
-	ResolutionSupersede ResolutionAction = "supersede"
-	ResolutionConflict  ResolutionAction = "conflict"
-	ResolutionCoexist   ResolutionAction = "coexist"
+	ResolutionDuplicate ResolutionAction = "duplicate" // 重复记忆，忽略候选，不写入新记忆
+	ResolutionReplace   ResolutionAction = "replace"   // 明确替换，将旧记忆标记为无效，写入新记忆
+	ResolutionConflict  ResolutionAction = "conflict"  // 同一属性出现不同值，但没有足够证据确认谁应该替换谁，保留为冲突
+	ResolutionCoexist   ResolutionAction = "coexist"   // 两条记忆可以同时存在，不互相替代
 )
 
 type Resolution struct {
@@ -76,7 +76,7 @@ func ResolveCandidate(existing []Memory, candidate Candidate) Resolution {
 		ids = append(ids, item.ID)
 	}
 	if normalizeChangeHint(candidate.ChangeHint) == ChangeHintReplace {
-		return Resolution{Action: ResolutionSupersede, RelatedIDs: ids, Reason: "explicit replacement of the same subject and attribute"}
+		return Resolution{Action: ResolutionReplace, RelatedIDs: ids, Reason: "explicit replacement of the same subject and attribute"}
 	}
 	return Resolution{Action: ResolutionConflict, RelatedIDs: ids, Reason: "different values for the same subject and attribute without a clear replacement"}
 }
@@ -86,24 +86,30 @@ func ResolveCandidate(existing []Memory, candidate Candidate) Resolution {
 // user after ResolveCandidate has confirmed that an existing memory would
 // actually be superseded.
 func NeedsReplacementConfirmation(candidate Candidate, sourceText string) bool {
-	return normalizeChangeHint(candidate.ChangeHint) == ChangeHintReplace && !explicitReplacementSignal(sourceText)
+	return normalizeChangeHint(candidate.ChangeHint) == ChangeHintReplace && !HasExplicitReplacementSignal(sourceText)
 }
 
-func explicitReplacementSignal(text string) bool {
+// HasExplicitReplacementSignal detects direct correction/update language in
+// the user's own message. It is a host-side safety signal, not a semantic slot
+// matcher; the curator still has to identify which existing memories are being
+// changed.
+func HasExplicitReplacementSignal(text string) bool {
 	text = strings.ToLower(strings.TrimSpace(text))
 	if text == "" {
 		return false
 	}
 	for _, signal := range []string{
 		"搬到", "搬去", "搬了", "改成", "改为", "换成", "换为", "变成", "变为",
-		"现在住", "现在是", "不再", "已经改", "改回",
+		"现在住", "现在是", "不再", "已经改", "改回", "其实", "实际上", "事实上",
+		"更正", "纠正", "说错了", "应该是", "准确地说",
 		"moved", "move to", "changed to", "change to", "now live", "no longer", "instead",
+		"actually", "correction", "to be precise", "rather than",
 	} {
 		if strings.Contains(text, signal) {
 			return true
 		}
 	}
-	if strings.Contains(text, "从") && strings.Contains(text, "到") {
+	if strings.Contains(text, "不是") && strings.Contains(text, "而是") {
 		return true
 	}
 	return false

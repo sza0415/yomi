@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +17,15 @@ import (
 
 type pipelineExtractor struct {
 	candidates []memory.Candidate
+}
+
+type pipelineCurator struct {
+	proposals []memory.Proposal
+	err       error
+}
+
+func (c pipelineCurator) Curate(context.Context, memory.ExtractionInput) ([]memory.Proposal, error) {
+	return c.proposals, c.err
 }
 
 func (e pipelineExtractor) Extract(context.Context, memory.ExtractionInput) ([]memory.Candidate, error) {
@@ -106,6 +117,32 @@ func TestMemoryPipelineDoesNotWriteRejectedCandidate(t *testing.T) {
 	}
 }
 
+func TestMemoryPipelineDoesNotFallbackAfterCuratorFailure(t *testing.T) {
+	store, err := memory.NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	loop := &Loop{
+		Memory:        store,
+		MemoryCurator: pipelineCurator{err: errors.New("curator unavailable")},
+		MemoryExtractor: pipelineExtractor{candidates: []memory.Candidate{{
+			Kind: memory.KindFact, Subject: "self", Attribute: "home_province",
+			Value: "四川", Content: "用户家在四川", Confidence: 0.95, Importance: 0.8,
+		}}},
+		Trace: tracing.NoopSink{},
+	}
+	outcome, confirmations := loop.extractAndStoreMemory(context.Background(), NewRun("session-1", RunBudget{}), bus.InboundMessage{
+		UserID: "alice", SessionID: "session-1", Text: "我的家在四川",
+	}, "好的")
+	if outcome.Status != "failed" || !strings.Contains(outcome.Error, "curator unavailable") || len(confirmations) != 0 {
+		t.Fatalf("outcome=%#v confirmations=%#v", outcome, confirmations)
+	}
+	if got, err := store.List(context.Background(), "alice"); err != nil || len(got) != 0 {
+		t.Fatalf("memories=%#v err=%v", got, err)
+	}
+}
+
 func TestMemoryPipelineSupersedesExplicitReplacement(t *testing.T) {
 	store, err := memory.NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
 	if err != nil {
@@ -142,6 +179,90 @@ func TestMemoryPipelineSupersedesExplicitReplacement(t *testing.T) {
 	}
 }
 
+func TestMemoryCuratorReusesExistingAttributeForExplicitReplacement(t *testing.T) {
+	store, err := memory.NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Upsert(context.Background(), memory.Memory{
+		ID: "mem-old", UserID: "alice", Kind: memory.KindFact, Subject: "self",
+		Attribute: "home_city", Value: "云南昭通", Content: "用户家在云南昭通", Status: memory.StatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loop := &Loop{
+		Memory: store, Trace: tracing.NoopSink{},
+		MemoryCurator: pipelineCurator{proposals: []memory.Proposal{{
+			Operation: memory.ProposalReplace, TargetIDs: []string{"mem-old"},
+			Candidate: memory.Candidate{Kind: memory.KindFact, Subject: "self", Attribute: "home_province",
+				Value: "四川", Content: "用户家在四川", Confidence: 0.95, Importance: 0.8},
+		}}},
+	}
+	outcome, confirmations := loop.extractAndStoreMemory(context.Background(), NewRun("session-1", RunBudget{}), bus.InboundMessage{
+		UserID: "alice", SessionID: "session-1", ChannelID: "test", Text: "我的家其实在四川",
+	}, "好的")
+	if len(confirmations) != 0 || outcome.WrittenCount != 1 || outcome.Status != "completed" {
+		t.Fatalf("outcome=%#v confirmations=%d", outcome, len(confirmations))
+	}
+	old, err := store.Get(context.Background(), "alice", "mem-old")
+	if err != nil || old.Status != memory.StatusSuperseded {
+		t.Fatalf("old=%#v err=%v", old, err)
+	}
+	result, err := store.Browse(context.Background(), memory.BrowseQuery{
+		UserID: "alice", Level: memory.BrowseMemories, Kind: memory.KindFact, Subject: "self", Attribute: "home_city",
+	})
+	if err != nil || len(result.Memories) != 1 || result.Memories[0].Value != "四川" {
+		t.Fatalf("replacement=%#v err=%v", result.Memories, err)
+	}
+	catalog, err := store.Catalog(context.Background(), "alice", false)
+	if err != nil || len(catalog) != 1 || catalog[0].Attribute != "home_city" {
+		t.Fatalf("catalog=%#v err=%v", catalog, err)
+	}
+}
+
+func TestMemoryConfirmationRestoresPendingProposalAfterRestart(t *testing.T) {
+	store, err := memory.NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.Upsert(ctx, memory.Memory{
+		ID: "mem-old", UserID: "alice", Kind: memory.KindFact, Subject: "self",
+		Attribute: "home_city", Value: "云南", Content: "用户家在云南", Status: memory.StatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.CreateProposal(ctx, memory.ProposalRecord{
+		UserID: "alice", SourceSessionID: "session-1", SourceRunID: "run-before-restart", ChannelID: "test",
+		Operation: memory.ProposalNeedsConfirmation,
+		Candidate: memory.Candidate{Kind: memory.KindFact, Subject: "self", Attribute: "home_city", Value: "四川", Content: "用户家在四川", Confidence: 0.9, Importance: 0.8},
+		TargetIDs: []string{"mem-old"}, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messageBus := bus.New(32)
+	loop := &Loop{Bus: messageBus, Memory: store, Trace: tracing.NoopSink{}, MemoryConfirmationTimeout: time.Second}
+	loopCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	loop.Start(loopCtx)
+	question := waitForMemoryQuestion(t, messageBus)
+	if err := messageBus.PublishInbound(ctx, bus.InboundMessage{UserID: "alice", SessionID: "session-1", ChannelID: "test", Text: "拒绝替换"}); err != nil {
+		t.Fatal(err)
+	}
+	waitForRunDone(t, messageBus, question.RunID)
+	pending, err := store.ListPendingProposals(ctx)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending=%#v err=%v", pending, err)
+	}
+	old, err := store.Get(ctx, "alice", "mem-old")
+	if err != nil || old.Status != memory.StatusActive {
+		t.Fatalf("old=%#v err=%v", old, err)
+	}
+}
+
 func TestMemoryPipelineConfirmsAmbiguousReplacementInLightweightRun(t *testing.T) {
 	loop, store, messageBus, sourceRun, cancel := newMemoryConfirmationFixture(t, time.Second)
 	defer cancel()
@@ -175,6 +296,10 @@ func TestMemoryPipelineConfirmsAmbiguousReplacementInLightweightRun(t *testing.T
 	if err != nil || len(got) != 1 || got[0].Status != memory.StatusActive {
 		t.Fatalf("confirmed memory = %#v, err=%v", got, err)
 	}
+	pending, err := store.ListPendingProposals(context.Background())
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending proposals = %#v, err=%v", pending, err)
+	}
 	state := sourceRun.Snapshot().Memory
 	if sourceRun.Status != RunCompleted || state.Status != "completed" || state.PendingConfirmationCount != 0 || state.ConfirmedCount != 1 || state.WrittenCount != 1 {
 		t.Fatalf("source run memory state = %#v, run status=%s", state, sourceRun.Status)
@@ -204,6 +329,31 @@ func TestMemoryPipelineDiscardsAmbiguousReplacementOnTimeout(t *testing.T) {
 	waitForRunDone(t, messageBus, question.RunID)
 
 	assertAmbiguousReplacementDiscarded(t, store, sourceRun)
+}
+
+func TestMemoryConfirmationKeepsProposalPendingOnShutdown(t *testing.T) {
+	loop, store, messageBus, sourceRun, cancel := newMemoryConfirmationFixture(t, time.Second)
+
+	loop.startMemoryExtraction(context.Background(), sourceRun, ambiguousReplacementInbound(), "好的")
+	question := waitForMemoryQuestion(t, messageBus)
+	cancel()
+	waitForRunDone(t, messageBus, question.RunID)
+
+	pending, err := store.ListPendingProposals(context.Background())
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending proposals = %#v, err=%v, want one proposal preserved for restart", pending, err)
+	}
+	old, err := store.Get(context.Background(), "alice", "mem-old")
+	if err != nil || old.Status != memory.StatusActive {
+		t.Fatalf("old memory = %#v, err=%v, want active", old, err)
+	}
+	if got, err := store.Search(context.Background(), memory.Query{UserID: "alice", Text: "上海", Limit: 8}); err != nil || len(got) != 0 {
+		t.Fatalf("candidate was written during shutdown: %#v, err=%v", got, err)
+	}
+	state := sourceRun.Snapshot().Memory
+	if state.Status != "waiting_user" || state.PendingConfirmationCount != 1 || state.WrittenCount != 0 {
+		t.Fatalf("source run memory state = %#v", state)
+	}
 }
 
 func TestMemoryPipelineDiscardsConfirmationWhenRelatedMemoryChanges(t *testing.T) {
@@ -381,6 +531,10 @@ func assertAmbiguousReplacementDiscarded(t *testing.T, store *memory.SQLiteStore
 	got, err := store.Search(context.Background(), memory.Query{UserID: "alice", Text: "上海", Limit: 8})
 	if err != nil || len(got) != 0 {
 		t.Fatalf("discarded candidate was stored: %#v, err=%v", got, err)
+	}
+	pending, err := store.ListPendingProposals(context.Background())
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending proposals = %#v, err=%v", pending, err)
 	}
 	state := sourceRun.Snapshot().Memory
 	if sourceRun.Status != RunCompleted || state.Status != "completed" || state.PendingConfirmationCount != 0 || state.DiscardedCount != 1 || state.WrittenCount != 0 {

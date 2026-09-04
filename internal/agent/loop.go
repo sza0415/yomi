@@ -13,6 +13,7 @@ import (
 	"github.com/ziangsun/szabot/internal/bus"
 	"github.com/ziangsun/szabot/internal/memory"
 	"github.com/ziangsun/szabot/internal/providers"
+	"github.com/ziangsun/szabot/internal/tools"
 	tracing "github.com/ziangsun/szabot/internal/trace"
 )
 
@@ -58,6 +59,7 @@ type Loop struct {
 	// performs the scoped lookup; Loop only supplies the inbound UserID.
 	Memory          memory.Store
 	MemoryExtractor memory.Extractor
+	MemoryCurator   memory.Curator
 	MemoryPolicy    memory.Policy
 	MemoryEmbedder  memory.EmbeddingProvider
 	MemoryIndexer   memory.Indexer
@@ -120,6 +122,7 @@ func (l *Loop) Start(ctx context.Context) {
 	if l.Runner != nil {
 		l.Runner.Asker = l
 	}
+	l.restorePendingMemoryConfirmations(ctx)
 	go l.run(ctx)
 }
 
@@ -303,6 +306,7 @@ func (l *Loop) handleRun(ctx context.Context, in bus.InboundMessage, run *Run) {
 				retrievalData := map[string]any{
 					"user_id_hash": hashScope(in.UserID), "query_hash": hashScope(in.Text),
 					"memory_count": built.MemoryCount, "memory_ids": built.MemoryIDs,
+					"catalog_count": built.MemoryCatalogCount,
 					"profile_count": built.MemoryProfileCount, "episode_count": built.MemoryEpisodeCount,
 					"lexical_count": built.MemoryLexicalCount, "semantic_count": built.MemorySemanticCount,
 					"fused_count": built.MemoryFusedCount, "fallback": built.MemoryFallback,
@@ -314,10 +318,11 @@ func (l *Loop) handleRun(ctx context.Context, in bus.InboundMessage, run *Run) {
 					retrievalData["rerank_error"] = built.MemoryRerankError
 				}
 				l.record(ctx, run, tracing.EventMemoryRetrievalFinished, "completed", retrievalData)
-				if built.MemoryCount > 0 {
+				if built.MemoryCount > 0 || built.MemoryCatalogCount > 0 {
 					l.record(ctx, run, tracing.EventMemoryContextInjected, "completed", map[string]any{
 						"user_id_hash": hashScope(in.UserID), "query_hash": hashScope(in.Text),
 						"memory_count": built.MemoryCount, "memory_ids": built.MemoryIDs, "estimated_tokens": built.MemoryTokens,
+						"catalog_count": built.MemoryCatalogCount,
 						"profile_count": built.MemoryProfileCount, "episode_count": built.MemoryEpisodeCount,
 						"lexical_count": built.MemoryLexicalCount, "semantic_count": built.MemorySemanticCount,
 						"fused_count": built.MemoryFusedCount, "fallback": built.MemoryFallback,
@@ -379,7 +384,7 @@ func (l *Loop) handleRun(ctx context.Context, in bus.InboundMessage, run *Run) {
 	})
 
 	// 把回信地址挂到当前 Run Context，供工具进行用户交互。
-	runCtx := withRoute(ctx, in.SessionID, in.ChannelID)
+	runCtx := tools.WithUser(withRoute(ctx, in.SessionID, in.ChannelID), in.UserID)
 
 	// 出站分片的统一发送器：按 Kind 区分正文 / 推理 / 工具调用 / 工具结果。
 	// 都以 Delta=true 的分片形式流过 bus，channel 可据 Kind 分区渲染。

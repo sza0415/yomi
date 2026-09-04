@@ -329,6 +329,7 @@ Yomi 当前已接入一个按 `UserID` 隔离的长期记忆存储。记忆不�
 
 - 当前可服务的记忆记录；
 - 只追加的记忆变更事件（新增、更新、冲突、删除）；
+- 等待人工确认的持久化变更提案；
 - SQLite FTS5 关键词索引。
 
 Memory 数据目录跟随 `SZABOT_SESSION_DIR`。自动提取默认对真实 LLM Provider 开启，Echo
@@ -345,9 +346,18 @@ export SZABOT_MEMORY_CONFIRMATION_TIMEOUT=10m
 go run ./cmd/szabot
 ```
 
-当提取模型建议替换已有记忆、但用户原话没有明确变化信号时，Yomi 不会直接写入候选，
-而是在同一 Session 的队列中创建一个轻量确认 Run。确认后旧记录变为 `superseded` 并写入
-新记录；拒绝、取消或超时都会保留旧记录并丢弃新候选。`superseded` 记录不会参与召回。
+异步记忆 curator 会先读取 L0 目录，再通过 `memory_browse` 按
+`kind -> subject -> attribute -> records` 渐进检索；层级不明确时可以使用 `memory_search`。
+`kind` 只有 `fact`、`preference`、`episode`，`subject` 表示记忆主体，通常为 `self`，也可以是
+朋友、家人或其他实体。subject/attribute 都是模型生成的导航标签，不作为语义相等的依据；
+curator 识别到同一语义槽位后会复用已有路径，例如用已有 `home_city` 承接新的
+`home_province` 表述。
+
+curator 只输出 `add`、`replace`、`coexist`、`no_op` 或 `needs_confirmation` 提案，代码负责
+校验目标 ID、用户边界、目标版本和写入权限。明确的纠正（例如“我的家其实在四川”）可以直接
+替换；关系不明确时，Yomi 会在同一 Session 队列中创建轻量确认 Run。确认后旧记录变为
+`superseded` 并写入新记录；拒绝或超时会保留旧记录并丢弃新候选。待确认 proposal 保存在
+SQLite 中，进程重启后会在原 Session 恢复，过期或目标版本已经变化的提案不会执行。
 
 未设置时默认使用启动工作目录下的 `sessionlogs/`。Qdrant 默认使用本机
 `http://127.0.0.1:6333`，执行 `go run ./cmd/szabot` 时会自动检测、启动或创建容器；
@@ -395,7 +405,7 @@ export SZABOT_RERANKER_TOP_N=20
 
 ```text
 memory.db=... sqlite_fts5=enabled extraction=enabled extraction_timeout=30s
-memory.layers=profile(fact,preference):limit=4 episode(episode):limit=4
+memory.context=catalog memory.tools=browse,search,get
 memory.embedding.base_url=... model=BAAI/bge-m3 api_key=configured
 memory.retrieval=hybrid=enabled reason=fts_bm25_plus_qdrant_rrf
 memory.reranker.base_url=... model=... api_key=configured enabled=enabled
@@ -465,9 +475,10 @@ docker volume rm yomi-qdrant-data
 export SZABOT_QDRANT_AUTO_START=off
 ```
 
-每次构造上下文时，`ContextManager` 会使用当前用户文本检索最多 8 条相关记忆，并以
-`<user_memory>` 参考资料块注入模型上下文。记忆检索失败不会阻塞主对话；删除会保留历史
-事件，但被删除记录不会再次进入默认检索结果。
+每次构造上下文时，`ContextManager` 只注入不含具体值和证据的 `<user_memory_catalog>` L0
+目录。主模型需要具体记忆时调用只读的 `memory_browse`、`memory_search` 或 `memory_get`；
+工具的 `UserID` 由宿主上下文绑定，模型不能在参数中指定其他用户。目录或检索失败不会阻塞
+主对话；`superseded` 和 `deleted` 记录不会进入默认目录或检索结果。
 
 `UserID` 是长期记忆的隔离键，`SessionID` 只是会话路由键。CLI 使用固定的
 `UserID=local`；Web 使用 `SZABOT_USER_ID` 配置的统一用户标识（默认也是 `local`），
@@ -484,8 +495,8 @@ Web 页面顶部会显示当前 `UserID`。会话首次发送消息时会记录�
 配置页还提供“清空调试数据”操作。确认后会删除当前 `sessionlogs` 下的会话、Trace、Run、
 Archive、Artifact，以及 SQLite 记忆和 Qdrant 向量；这是不可逆操作。
 
-当前已支持 Run 完成后的异步候选提取、敏感信息策略过滤、重复候选去重、SQLite 写入、
-Embedding 生成、SQLite FTS5/BM25 + Qdrant 的混合召回和 HTTP Reranker 适配。用户侧
+当前已支持 Run 完成后的异步工具化 curator、层级浏览、持久化人工确认、敏感信息策略过滤、
+重复候选去重、SQLite 原子写入、Embedding 生成、SQLite FTS5/BM25 + Qdrant 的混合召回和 HTTP Reranker 适配。用户侧
 `memory list / correct / forget` 入口仍尚未完成。完整设计、
 数据模型和后续路线见
 [`docs/user-memory-v1-design.md`](docs/user-memory-v1-design.md) 与
@@ -499,7 +510,7 @@ Run 的 Trace；异步处理完成后会更新该 Run 快照。
 
 ### Trace 建设
 
-Trace 不会回放给模型，按 Run 保存 JSONL 事件：Run 生命周期、system prompt、实际模型请求、reasoning、assistant 消息、工具参数与结果、错误、耗时和 usage。当前还会记录 Memory 检索、记忆上下文注入、提取、策略决策、候选接受/拒绝、SQLite 写入和可选索引结果，并在 Run Snapshot 中保存 Memory 子状态和计数；记忆正文可能作为实际模型请求的一部分出现在 Trace 中。Trace 含未脱敏原文，当前没有自动轮转、保留期或脱敏机制。完整格式和写入时机见 [`docs/conversation-and-trace.md`](docs/conversation-and-trace.md)。
+Trace 不会回放给模型，按 Run 保存 JSONL 事件：Run 生命周期、system prompt、实际模型请求、reasoning、assistant 消息、工具参数与结果、错误、耗时和 usage。当前还会记录 Memory 目录注入、提取、proposal 决策与持久化、人工确认、策略决策、候选接受/拒绝、SQLite 写入和可选索引结果，并在 Run Snapshot 中保存 Memory 子状态和计数。Trace 含未脱敏原文，当前没有自动轮转、保留期或脱敏机制。完整格式和写入时机见 [`docs/conversation-and-trace.md`](docs/conversation-and-trace.md)。
 
 
 ## Harness

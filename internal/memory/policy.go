@@ -50,7 +50,7 @@ func (p Policy) Apply(candidates []Candidate) PolicyResult {
 			reason = "invalid_importance"
 		case len([]rune(candidate.Content)) > p.MaxContentChars:
 			reason = "content_too_long"
-		case sensitivePattern.MatchString(candidate.Content) || sensitivePattern.MatchString(candidate.Evidence):
+		case sensitivePattern.MatchString(candidate.Content) || sensitivePattern.MatchString(candidate.Evidence) || sensitivePattern.MatchString(candidate.Value):
 			reason = "sensitive_data"
 		}
 		if reason != "" {

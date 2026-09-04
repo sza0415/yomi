@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -191,6 +192,46 @@ func (h *HybridStore) Delete(ctx context.Context, userID, id, reason string) err
 
 func (h *HybridStore) Rebuild(ctx context.Context, userID string) error {
 	return h.Canonical.Rebuild(ctx, userID)
+}
+
+func (h *HybridStore) Browse(ctx context.Context, query BrowseQuery) (BrowseResult, error) {
+	browser, ok := h.Canonical.(Browser)
+	if !ok {
+		return BrowseResult{}, errors.New("memory: canonical store does not support browsing")
+	}
+	return browser.Browse(ctx, query)
+}
+
+func (h *HybridStore) Catalog(ctx context.Context, userID string, includeConflicts bool) ([]CatalogEntry, error) {
+	browser, ok := h.Canonical.(Browser)
+	if !ok {
+		return nil, errors.New("memory: canonical store does not support catalog browsing")
+	}
+	return browser.Catalog(ctx, userID, includeConflicts)
+}
+
+func (h *HybridStore) CreateProposal(ctx context.Context, proposal ProposalRecord) (ProposalRecord, error) {
+	store, ok := h.Canonical.(ProposalStore)
+	if !ok {
+		return ProposalRecord{}, errors.New("memory: canonical store does not support proposals")
+	}
+	return store.CreateProposal(ctx, proposal)
+}
+
+func (h *HybridStore) CompleteProposal(ctx context.Context, userID, proposalID, status string) error {
+	store, ok := h.Canonical.(ProposalStore)
+	if !ok {
+		return errors.New("memory: canonical store does not support proposals")
+	}
+	return store.CompleteProposal(ctx, userID, proposalID, status)
+}
+
+func (h *HybridStore) ListPendingProposals(ctx context.Context) ([]ProposalRecord, error) {
+	store, ok := h.Canonical.(ProposalStore)
+	if !ok {
+		return nil, errors.New("memory: canonical store does not support proposals")
+	}
+	return store.ListPendingProposals(ctx)
 }
 
 func servable(item Memory, query Query) bool {
